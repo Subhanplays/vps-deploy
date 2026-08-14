@@ -59,7 +59,7 @@ If `/dev/kvm` does not exist the bot logs a clear warning and refuses to deploy.
 ## Installation
 
 ```bash
-git clone <your-repo> vps-bot
+git clone https://github.com/Subhanplays/vps-deploy.2.0
 cd vps-bot
 
 python3 -m venv .venv
