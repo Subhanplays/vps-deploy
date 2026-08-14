@@ -261,6 +261,32 @@ class OsSelectView(discord.ui.View):
         await start_ram_step(interaction, "debian")
 
 
+class NextStepView(discord.ui.View):
+    """Confirmation message + Continue button between wizard steps.
+
+    Discord does not allow a modal to be opened directly in response to a
+    modal submit, so each step sends this message and the button opens the
+    next modal.
+    """
+
+    def __init__(self, spec, step):
+        super().__init__(timeout=180)
+        self.spec = spec
+        self.step = step
+
+    @discord.ui.button(label="Continue", style=discord.ButtonStyle.primary, emoji="➡️")
+    async def cont(self, interaction: discord.Interaction, _: discord.ui.Button):
+        if self.step == "storage":
+            await interaction.response.send_modal(StorageModal(self.spec))
+        elif self.step == "cpu":
+            await interaction.response.send_modal(CpuModal(self.spec))
+        else:
+            await interaction.response.send_message(
+                embed=brand_embed(title="Error", description="Unknown wizard step.", color=discord.Color.red()),
+                ephemeral=True,
+            )
+
+
 class RamModal(discord.ui.Modal, title="💾 RAM"):
     ram = discord.ui.TextInput(
         label="RAM (GB)",
@@ -501,11 +527,27 @@ async def start_ram_step(interaction: discord.Interaction, os_name):
 
 
 async def start_storage_step(interaction: discord.Interaction, spec):
-    await interaction.response.send_modal(StorageModal(spec))
+    os_name = config.os_names.get(spec["os"], spec["os"].title())
+    await interaction.response.send_message(
+        embed=brand_embed(
+            title="💾 RAM Set",
+            description=f"**OS:** {os_name}\n**RAM:** {spec['ram']} GB\n\nClick **Continue** to set Storage (💿).",
+        ),
+        view=NextStepView(spec, "storage"),
+        ephemeral=True,
+    )
 
 
 async def start_cpu_step(interaction: discord.Interaction, spec):
-    await interaction.response.send_modal(CpuModal(spec))
+    os_name = config.os_names.get(spec["os"], spec["os"].title())
+    await interaction.response.send_message(
+        embed=brand_embed(
+            title="💿 Storage Set",
+            description=f"**OS:** {os_name}\n**RAM:** {spec['ram']} GB\n**Storage:** {spec['disk']} GB\n\nClick **Continue** to set CPU (⚙️).",
+        ),
+        view=NextStepView(spec, "cpu"),
+        ephemeral=True,
+    )
 
 
 async def show_confirmation(interaction: discord.Interaction, spec):
