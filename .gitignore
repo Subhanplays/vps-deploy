@@ -1,0 +1,17 @@
+# Secrets
+.env
+
+# Runtime data
+/var/
+*.db
+*.log
+__pycache__/
+*.pyc
+
+# SSH keys
+id_vpsbot
+id_vpsbot.pub
+
+# Local test residue
+.venv/
+venv/
