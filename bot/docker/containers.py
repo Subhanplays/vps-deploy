@@ -17,6 +17,25 @@ logger = logging.getLogger("vpsbot.docker")
 # Storage drivers that honour `--storage-opt size=` for container quotas.
 _SIZE_OPT_DRIVERS = {"zfs", "btrfs", "devicemapper"}
 
+# Error signatures that mean "the daemon cannot enforce the storage quota"
+# even though the driver nominally supports `--storage-opt size=` (e.g. btrfs
+# needs quota support on the filesystem, which is not always enabled).
+_QUOTA_FAILURE_MARKERS = (
+    "storage driver does not support",
+    "operation not permitted",
+    "quota",
+    "not supported",
+)
+
+
+def _quota_failed(result: DockerResult) -> bool:
+    stderr = (result.stderr or "").lower()
+    return any(marker in stderr for marker in _QUOTA_FAILURE_MARKERS)
+
+
+def _has_flag(args: list[str], flag: str) -> bool:
+    return any(arg == flag or arg.startswith(f"{flag}=") for arg in args)
+
 
 class ContainerSpec:
     def __init__(
@@ -100,14 +119,24 @@ async def create_container(docker: DockerManager, spec: ContainerSpec) -> tuple[
         return None, False, pull_error.message or "Failed to pull image."
 
     driver = await _storage_driver(docker)
-    disk_enforced = driver in _SIZE_OPT_DRIVERS
-    logger.info("Docker storage driver '%s' - storage-opt disk quota: %s", driver, disk_enforced)
+    driver_supports = driver in _SIZE_OPT_DRIVERS
+    logger.info("Docker storage driver '%s' - storage-opt disk quota: %s", driver, driver_supports)
 
-    result = await docker.run_container(build_run_args(spec, with_storage_opt=True))
-    if not result.ok and "storage driver does not support" in result.stderr.lower():
-        logger.warning("Storage driver does not support size quota; retrying without it.")
-        result = await docker.run_container(build_run_args(spec, with_storage_opt=False))
-        disk_enforced = False
+    used_args = build_run_args(spec, with_storage_opt=True)
+    result = await docker.run_container(used_args)
+    if (
+        not result.ok
+        and _has_flag(used_args, "--storage-opt")
+        and _quota_failed(result)
+    ):
+        logger.warning("Storage quota cannot be enforced on this host; retrying without it.")
+        # A failed `docker run` may leave a container registered under the
+        # requested name - clear it so the retry does not hit a name conflict.
+        await docker._run(["rm", "-f", spec.name], timeout=30.0)
+        used_args = build_run_args(spec, with_storage_opt=False)
+        result = await docker.run_container(used_args)
+
+    disk_enforced = _has_flag(used_args, "--storage-opt") and driver_supports
 
     if not result.ok:
         return None, disk_enforced, result.message or "Docker failed to create the container."
