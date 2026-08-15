@@ -135,6 +135,9 @@ class Config:
         # ------------------------------------------------------------------
         self.tmate_enabled = _bool("TMATE_ENABLED", "true")
         self.deploy_timeout = _int("DEPLOY_TIMEOUT", 600)
+        # How long to wait for a VM to finish booting to SSH + cloud-init.
+        # Software emulation (TCG) boots are very slow, so this is generous.
+        self.boot_timeout = _int("BOOT_TIMEOUT", 480)
         self.rate_limit_seconds = _int("RATE_LIMIT_SECONDS", 60)
 
         # QEMU software emulation (TCG) fallback for hosts without /dev/kvm

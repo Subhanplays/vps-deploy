@@ -169,12 +169,27 @@ def spec_embed(interaction, spec, title="🚀 VPS Configuration"):
     return embed
 
 
+def _serial_tail(vps, lines=40):
+    """Return the tail of a VPS's serial console log, for diagnostics."""
+    instance_dir = (vps or {}).get("instance_dir")
+    if not instance_dir:
+        return ""
+    log_path = os.path.join(instance_dir, "serial.log")
+    if not os.path.exists(log_path):
+        return ""
+    try:
+        with open(log_path, errors="replace") as fh:
+            data = fh.read()
+        return "\n".join(data.splitlines()[-lines:])
+    except OSError:
+        return ""
+
+
 async def _run_deployment(interaction, spec, vps, progress_embed_msg, progress):
     """Run the full KVM deployment. Cleans up on any failure."""
     job_id = vps["vps_id"]
     db.create_job(job_id, vps["vps_id"], vps["discord_user_id"])
     db.update_job(job_id, status="running")
-
     pubkey = vpslib.ensure_ssh_key()
     ip_address = None
     tmate_session = None
@@ -196,8 +211,8 @@ async def _run_deployment(interaction, spec, vps, progress_embed_msg, progress):
         db.update_vps(vps["vps_id"], ip_address=ip_address)
         await progress_embed_msg(progress)
 
-        await tmate_lib.wait_for_ssh(ip_address, timeout=180)
-        await tmate_lib.wait_for_cloud_init(ip_address, timeout=300)
+        await tmate_lib.wait_for_ssh(ip_address, timeout=config.boot_timeout)
+        await tmate_lib.wait_for_cloud_init(ip_address, timeout=config.boot_timeout)
         await progress.mark("Installing tmate")
         await progress_embed_msg(progress)
 
@@ -216,10 +231,14 @@ async def _run_deployment(interaction, spec, vps, progress_embed_msg, progress):
         db.log_audit(vps["discord_user_id"], "vps_deployed", vps["vps_id"])
         return tmate_session, ip_address
     except Exception as exc:  # noqa: BLE001 - full cleanup on any failure
-        logger.error("Deployment failed for %s: %s", vps["vps_id"], exc)
+        detail = str(exc)
+        tail = _serial_tail(vps)
+        if tail:
+            detail += "\n\n--- serial log (tail) ---\n" + tail
+        logger.error("Deployment failed for %s: %s", vps["vps_id"], detail)
         await vpslib.cleanup_failed(vps)
-        db.update_job(job_id, status="failed", message=str(exc)[-500:])
-        raise
+        db.update_job(job_id, status="failed", message=detail[-500:])
+        raise RuntimeError(detail) from exc
 
 
 # --------------------------------------------------------------------------
@@ -865,8 +884,8 @@ async def _confirm_reinstall(interaction, vps):
         ip_address = await vpslib.wait_for_ip(vps["vm_name"], timeout=180, progress=progress.mark)
         db.update_vps(vps["vps_id"], ip_address=ip_address)
         await update_embed(progress)
-        await tmate_lib.wait_for_ssh(ip_address, timeout=180)
-        await tmate_lib.wait_for_cloud_init(ip_address, timeout=300)
+        await tmate_lib.wait_for_ssh(ip_address, timeout=config.boot_timeout)
+        await tmate_lib.wait_for_cloud_init(ip_address, timeout=config.boot_timeout)
         await progress.mark("Installing tmate")
         await update_embed(progress)
         session = None
@@ -886,12 +905,16 @@ async def _confirm_reinstall(interaction, vps):
             result.add_field(name="🔐 SSH", value=f"```\n{session}\n```", inline=False)
         await interaction.edit_original_response(embed=result)
     except Exception as exc:  # noqa: BLE001
-        logger.error("Reinstall failed for %s: %s", vps["vps_id"], exc)
+        detail = str(exc)
+        tail = _serial_tail(vps)
+        if tail:
+            detail += "\n\n--- serial log (tail) ---\n" + tail
+        logger.error("Reinstall failed for %s: %s", vps["vps_id"], detail)
         await vpslib.cleanup_failed(vps)
         await interaction.edit_original_response(
             embed=brand_embed(
                 title="❌ Reinstall Failed",
-                description=str(exc),
+                description=detail,
                 color=discord.Color.red(),
             )
         )
@@ -1392,8 +1415,8 @@ async def _admin_reinstall(interaction, vps):
         ip_address = await vpslib.wait_for_ip(vps["vm_name"], timeout=180, progress=progress.mark)
         db.update_vps(vps["vps_id"], ip_address=ip_address)
         await update_embed(progress)
-        await tmate_lib.wait_for_ssh(ip_address, timeout=180)
-        await tmate_lib.wait_for_cloud_init(ip_address, timeout=300)
+        await tmate_lib.wait_for_ssh(ip_address, timeout=config.boot_timeout)
+        await tmate_lib.wait_for_cloud_init(ip_address, timeout=config.boot_timeout)
         await progress.mark("Installing tmate")
         await update_embed(progress)
         session = None
@@ -1412,10 +1435,14 @@ async def _admin_reinstall(interaction, vps):
             result.add_field(name="🔐 SSH", value=f"```\n{session}\n```", inline=False)
         await interaction.edit_original_response(embed=result)
     except Exception as exc:  # noqa: BLE001
-        logger.error("Admin reinstall failed for %s: %s", vps["vps_id"], exc)
+        detail = str(exc)
+        tail = _serial_tail(vps)
+        if tail:
+            detail += "\n\n--- serial log (tail) ---\n" + tail
+        logger.error("Admin reinstall failed for %s: %s", vps["vps_id"], detail)
         await vpslib.cleanup_failed(vps)
         await interaction.edit_original_response(
-            embed=brand_embed(title="❌ Reinstall Failed", description=str(exc), color=discord.Color.red())
+            embed=brand_embed(title="❌ Reinstall Failed", description=detail, color=discord.Color.red())
         )
 
 
