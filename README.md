@@ -37,11 +37,13 @@ Discord -> /vps -> Create VPS -> OS -> RAM -> Storage -> CPU -> Confirm
 
 The bot runs on Linux. With KVM it creates hardware-accelerated VMs; **without
 `/dev/kvm` it automatically falls back to QEMU software emulation (TCG)** - the
-VMs are still real, but noticeably slower. This lets it also run inside
-containers and sandboxes (e.g. CodeSandbox) for testing.
+VMs are still real, but noticeably slower. In containers/sandboxes that also
+have no libvirt daemon it runs QEMU **directly** (no daemon at all, `VIRT_BACKEND=auto`
+detects this). This lets the bot work inside containers and sandboxes
+(e.g. CodeSandbox) for testing.
 
 ```bash
-virsh list --all          # libvirt working
+virsh list --all          # optional - only for libvirt/KVM mode
 qemu-system-x86_64 --version
 ls -l /dev/kvm            # optional - only for fast KVM mode
 egrep -c '(vmx|svm)' /proc/cpuinfo   # optional - only for fast KVM mode
@@ -54,35 +56,29 @@ sudo apt update
 sudo apt install -y python3 python3-pip python3-venv \
     qemu-system-x86 qemu-utils libvirt-clients \
     cloud-image-utils ssh openssh-client
-sudo systemctl enable --now libvirtd
+sudo systemctl enable --now libvirtd   # only needed for libvirt/KVM mode
 ```
 
 If `/dev/kvm` does not exist the bot logs a clear warning and creates VMs using
 QEMU software emulation (TCG). Set `ALLOW_SOFTWARE_EMULATION=false` to refuse
-deployments without KVM instead.
+deployments without KVM instead. When there is no libvirt daemon either, set
+`VIRT_BACKEND=direct` (or leave `auto`) to launch QEMU directly.
 
-### Container / sandbox setup (no systemd, no root)
+### Container / sandbox setup (no libvirt daemon needed)
 
-In a container (like CodeSandbox) use libvirt in per-user **session** mode via
-the modular `virtqemud` daemon (`libvirtd` has no `--session` flag on older
-releases). The VMs run as your user with QEMU software emulation:
+With `VIRT_BACKEND=auto` the bot automatically runs QEMU directly when the
+libvirt daemon is unreachable, so containers only need the QEMU tooling:
 
 ```bash
 sudo apt update
 sudo apt install -y python3 python3-pip qemu-system-x86 qemu-utils \
-    libvirt-clients cloud-image-utils ssh \
-    libvirt-daemon-driver-qemu      # provides virtqemud (session daemon)
+    libvirt-clients cloud-image-utils ssh
 
-# start the per-user QEMU daemon (helper script in this repo)
-bash start_session_libvirt.sh
-# or manually:
-#   virtlogd --session &
-#   virtqemud --session &
-
-virsh -c qemu:///session list --all     # should work now
+virsh list --all          # expected: fails to connect (no daemon) -> bot uses direct QEMU
 ```
 
-Then in `.env` set `LIBVIRT_URI=qemu:///session`. Software emulation is slow:
+VMs run as your user with SLIRP user networking and get the fixed address
+`10.0.2.15` (reachable from the host via SSH). Software emulation is slow:
 expect a fresh Ubuntu boot to take a long time under TCG.
 
 ## Installation

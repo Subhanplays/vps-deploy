@@ -146,6 +146,13 @@ class Config:
         # libvirt connection URI. Use qemu:///session in containers/sandboxes
         # where the system libvirtd service is not available.
         self.libvirt_uri = os.getenv("LIBVIRT_URI", "qemu:///system")
+        # VM backend: auto | virsh | direct.
+        #  - 'virsh'  : manage VMs through the libvirt daemon (virsh).
+        #  - 'direct' : launch QEMU processes directly (no libvirt daemon),
+        #               the most reliable option inside containers/sandboxes
+        #               that lack /dev/kvm AND a libvirt daemon.
+        #  - 'auto'   : use virsh when it works, otherwise fall back to direct.
+        self.virt_backend = os.getenv("VIRT_BACKEND", "auto").strip().lower()
         # Fixed guest IP assigned by QEMU user-mode networking (SLIRP), used
         # only in software emulation mode.
         self.slirp_ip = os.getenv("SLIRP_IP", "10.0.2.15")

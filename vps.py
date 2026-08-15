@@ -9,9 +9,11 @@ reinstall, kill (force stop), status.
 """
 
 import asyncio
+import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import time
 
@@ -83,7 +85,10 @@ def _emulator():
 def check_environment():
     """Return a list of (ok: bool, message: str) host capability checks."""
     checks = []
-    if host_kvm_available():
+    direct = use_direct()
+    if direct:
+        checks.append((True, "Direct QEMU mode (no libvirt daemon required)"))
+    elif host_kvm_available():
         checks.append((True, "KVM acceleration (/dev/kvm) available"))
     elif config.allow_software_emulation:
         checks.append((True, "KVM unavailable - using QEMU software emulation (TCG, slower)"))
@@ -91,7 +96,8 @@ def check_environment():
         checks.append((False, "KVM acceleration (/dev/kvm) unavailable and software emulation is disabled"))
     emulator = _emulator()
     checks.append((os.path.exists(emulator), f"QEMU emulator ({emulator}) installed"))
-    checks.append((shutil.which("virsh") is not None, "virsh (libvirt) installed"))
+    if not direct:
+        checks.append((shutil.which("virsh") is not None, "virsh (libvirt) installed"))
     checks.append((shutil.which("qemu-img") is not None, "qemu-img installed"))
     checks.append((shutil.which("cloud-localds") is not None, "cloud-localds (cloud-image-utils) installed"))
     checks.append((shutil.which("ssh-keygen") is not None, "ssh-keygen available"))
@@ -116,6 +122,215 @@ def acceleration():
     if host_kvm_available():
         return "kvm"
     return "tcg"
+
+
+# --------------------------------------------------------------------------
+# Direct QEMU backend (no libvirt daemon)
+#
+# Containers/sandboxes often have neither /dev/kvm nor a libvirt daemon, so
+# the bot can launch real QEMU processes directly. SLIRP user networking
+# gives the guest the fixed 10.0.2.15 address, reachable from the host.
+# --------------------------------------------------------------------------
+def _virsh_reachable():
+    """Cheap check whether virsh can talk to the configured libvirt URI."""
+    if shutil.which("virsh") is None:
+        return False
+    try:
+        code, _, _ = _run(["virsh", "list"], timeout=10)
+        return code == 0
+    except VpsError:
+        return False
+
+
+def use_direct():
+    """True when VMs should be launched directly by QEMU (no libvirt)."""
+    if config.virt_backend == "virsh":
+        return False
+    if config.virt_backend == "direct":
+        return True
+    # auto: prefer virsh when KVM is available or a daemon answers, else
+    # fall back to direct QEMU.
+    if host_kvm_available():
+        return False
+    return not _virsh_reachable()
+
+
+def _instance_meta(vm_name):
+    base = os.path.join(config.instances_dir, vm_name)
+    return {
+        "pid": os.path.join(base, "qemu.pid"),
+        "monitor": os.path.join(base, "monitor.sock"),
+        "argv": os.path.join(base, "launch.json"),
+        "log": os.path.join(base, "serial.log"),
+    }
+
+
+def _read_pid(vm_name):
+    try:
+        with open(_instance_meta(vm_name)["pid"]) as fh:
+            return int(fh.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _pid_alive(vm_name, pid):
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    # Guard against PID reuse: the process command line must mention the VM.
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            if vm_name.encode() not in fh.read():
+                return False
+    except OSError:
+        pass
+    return True
+
+
+def _load_argv(vm_name):
+    try:
+        with open(_instance_meta(vm_name)["argv"]) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def _hmp(vm_name, command):
+    """Send a human monitor protocol command to the VM, if reachable."""
+    meta = _instance_meta(vm_name)
+    if not os.path.exists(meta["monitor"]):
+        return False
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        sock.connect(meta["monitor"])
+        sock.sendall((command + "\n").encode())
+        data = b""
+        try:
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+                if b"(qemu)" in data:
+                    break
+        except socket.timeout:
+            pass
+        sock.close()
+        return True
+    except OSError:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        return False
+
+
+def _direct_argv(vm_name, vm_uuid, ram_kib, vcpu, disk_path, seed_path):
+    return [
+        _emulator(),
+        "-name", vm_name,
+        "-uuid", vm_uuid,
+        "-machine", "pc",
+        "-accel", "tcg",
+        "-cpu", "max",
+        "-m", f"{ram_kib // 1024}M",
+        "-smp", str(vcpu),
+        "-drive", f"file={disk_path},format=qcow2,if=virtio,cache=writeback",
+        "-drive", f"file={seed_path},format=raw,if=virtio,readonly=on",
+        "-netdev", "user,id=n0",
+        "-device", "virtio-net-pci,netdev=n0",
+        "-display", "none",
+        "-serial", f"file:{_instance_meta(vm_name)['log']}",
+        "-monitor", f"unix:{_instance_meta(vm_name)['monitor']},server,nowait",
+        "-pidfile", _instance_meta(vm_name)["pid"],
+        "-daemonize",
+    ]
+
+
+def direct_launch(vm_name, vm_uuid, ram_kib, vcpu, disk_path, seed_path):
+    """Start a QEMU process directly (no libvirt)."""
+    _check_name(vm_name)
+    meta = _instance_meta(vm_name)
+    os.makedirs(os.path.dirname(meta["pid"]), exist_ok=True)
+    if _pid_alive(vm_name, _read_pid(vm_name)):
+        return
+    for stale in (meta["monitor"], meta["pid"]):
+        try:
+            os.remove(stale)
+        except OSError:
+            pass
+    argv = _direct_argv(vm_name, vm_uuid, ram_kib, vcpu, disk_path, seed_path)
+    with open(meta["argv"], "w") as fh:
+        json.dump(argv, fh)
+    code, out, err = _run(argv, timeout=30)
+    if code != 0:
+        raise VpsError(f"Failed to start QEMU: {err}")
+    time.sleep(1)
+    if not _pid_alive(vm_name, _read_pid(vm_name)):
+        raise VpsError("QEMU exited immediately after launch. Check the serial log.")
+
+
+def direct_status(vm_name):
+    return "running" if _pid_alive(vm_name, _read_pid(vm_name)) else "stopped"
+
+
+def direct_start(vm_name):
+    _check_name(vm_name)
+    if direct_status(vm_name) == "running":
+        return True
+    argv = _load_argv(vm_name)
+    if not argv:
+        return False
+    code, out, err = _run(argv, timeout=30)
+    if code != 0:
+        return False
+    time.sleep(1)
+    return direct_status(vm_name) == "running"
+
+
+def direct_kill(vm_name):
+    _check_name(vm_name)
+    if not _hmp(vm_name, "quit"):
+        pid = _read_pid(vm_name)
+        if pid:
+            try:
+                os.kill(pid, 15)
+            except OSError:
+                pass
+    time.sleep(1)
+    if direct_status(vm_name) == "running":
+        pid = _read_pid(vm_name)
+        if pid:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+    return direct_status(vm_name) != "running"
+
+
+def direct_stop(vm_name, timeout=60):
+    """Graceful ACPI shutdown (system_powerdown), escalating to kill."""
+    _check_name(vm_name)
+    if direct_status(vm_name) != "running":
+        return True
+    _hmp(vm_name, "system_powerdown")
+    start = time.monotonic()
+    while time.monotonic() - start < timeout:
+        time.sleep(3)
+        if direct_status(vm_name) != "running":
+            return True
+    return direct_kill(vm_name)
+
+
+def direct_restart(vm_name):
+    _check_name(vm_name)
+    direct_kill(vm_name)
+    time.sleep(1)
+    return direct_start(vm_name)
 
 
 def physical_resources():
@@ -267,6 +482,8 @@ def check_spec(os_name, cpu, ram, disk):
 # --------------------------------------------------------------------------
 def status_of(vm_name):
     _check_name(vm_name)
+    if use_direct():
+        return direct_status(vm_name)
     code, out, err = _virsh("domstate", vm_name)
     if code != 0:
         return "stopped"
@@ -333,6 +550,14 @@ async def create_vm(vps, pubkey, progress=None):
     # fresh so create + define always agree.
     vm_uuid = vps["vm_uuid"]
 
+    if use_direct():
+        if progress:
+            await progress("✅ Creating virtual machine")
+        direct_launch(vm_name, vm_uuid, ram_kib, vps["cpu"], disk_path, seed_path)
+        if progress:
+            await progress("✅ Starting VPS")
+        return disk_path, seed_path, instance_dir
+
     xml = _domain_xml(vm_name, vm_uuid, ram_kib, vps["cpu"], disk_path, seed_path)
 
     xml_path = os.path.join(instance_dir, "domain.xml")
@@ -358,10 +583,9 @@ async def create_vm(vps, pubkey, progress=None):
 async def wait_for_ip(vm_name, timeout=180, progress=None):
     """Poll libvirt DHCP leases / ARP until the VM has an IPv4 address."""
     _check_name(vm_name)
-    # In software emulation mode the VM uses QEMU user-mode (SLIRP) networking
-    # where the guest is always given the fixed 10.0.2.15 address and libvirt
-    # tracks no DHCP lease, so there is nothing to poll.
-    if acceleration() == "tcg":
+    # In direct QEMU mode the VM always gets the fixed SLIRP 10.0.2.15 address
+    # (no libvirt DHCP lease to poll). Same for software emulation.
+    if use_direct() or acceleration() == "tcg":
         await asyncio.sleep(5)
         if progress:
             await progress("✅ Configuring network")
@@ -473,6 +697,8 @@ def _domain_xml(vm_name, vm_uuid, ram_kib, vcpu, disk_path, seed_path):
 
 async def start_vm(vm_name):
     _check_name(vm_name)
+    if use_direct():
+        return direct_start(vm_name)
     if status_of(vm_name) == "running":
         return True
     code, out, err = _virsh("start", vm_name)
@@ -482,6 +708,8 @@ async def start_vm(vm_name):
 async def stop_vm(vm_name, timeout=60):
     """Graceful ACPI shutdown, escalating to a forced destroy."""
     _check_name(vm_name)
+    if use_direct():
+        return direct_stop(vm_name, timeout)
     code, out, err = _virsh("shutdown", vm_name)
     if code != 0:
         # Not running or already off.
@@ -498,12 +726,16 @@ async def stop_vm(vm_name, timeout=60):
 async def kill_vm(vm_name):
     """Force stop (virsh destroy)."""
     _check_name(vm_name)
+    if use_direct():
+        return direct_kill(vm_name)
     code, out, err = _virsh("destroy", vm_name)
     return code == 0
 
 
 async def restart_vm(vm_name):
     _check_name(vm_name)
+    if use_direct():
+        return direct_restart(vm_name)
     code, out, err = _virsh("reboot", vm_name)
     if code == 0:
         return True
@@ -515,6 +747,9 @@ async def restart_vm(vm_name):
 def delete_vm(vm_name):
     """Undefine + destroy the domain and remove its files."""
     _check_name(vm_name)
+    if use_direct():
+        direct_kill(vm_name)
+        return
     _virsh("destroy", vm_name)
     _virsh("undefine", vm_name)
     code, out, err = _virsh("domstate", vm_name)
