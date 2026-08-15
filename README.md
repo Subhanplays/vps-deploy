@@ -1,221 +1,181 @@
-# White-Label Discord VPS Bot (KVM/QEMU)
+# VPS Bot v2
 
-A simple, lightweight Discord bot that deploys **real KVM/QEMU virtual machines**
-directly on the Linux host where it runs. No external VPS provider API, no fake
-containers pretending to be VPSs.
+A modern, white-label Discord VPS management bot. Users deploy real Docker
+containers with honest resource limits, manage them from interactive
+dashboards, and receive SSH access directly in their DMs.
+
+Everything users see — brand name, colors, status, embed copy, resource
+limits, plans, even the auto-generated VPS names — is configurable at runtime
+without touching a single line of Python.
 
 ```
-Discord -> /vps -> Create VPS -> OS -> RAM -> Storage -> CPU -> Confirm
-    -> KVM/QEMU creates a real VM
-    -> cloud-init configures it
-    -> tmate session generated
-    -> private SSH connection sent to the owner
+/create      deploy a new VPS (choose OS, plan or custom resources)
+/vps         interactive dashboard: manage, stats, info, SSH, logs, delete
+/list        list your VPS instances
+/ssh         generate a fresh SSH session (DM only)
+/help        interactive help center
+/about       about this service
+/ping        latency
+/admin       hosting control panel (dashboard, ban, kill, stats, ...)
+/settings    runtime bot configuration (admins only)
 ```
 
 ## Features
 
-- **Real KVM VPS** - every instance is a libvirt-managed QEMU virtual machine
-  (`virsh list --all` shows them).
-- **Interactive flow** - `/vps` lets users pick OS, RAM, storage and CPU through
-  modals and buttons, then shows a confirmation before deploying.
-- **RAM overcommit (overselling)** - with `RAM_OVERCOMMIT=true` the bot budgets
-  against `MAX_ALLOCATED_RAM` instead of physical RAM. A host with 8 GB RAM can
-  intentionally allocate 120 GB of *virtual* RAM.
-- **CPU overcommit** - same concept for vCPUs via `MAX_ALLOCATED_CPU`.
-- **Sparse QCOW2 disks** - virtual disk size can be larger than its physical
-  footprint, but the bot still checks real free storage before creating a disk.
-- **cloud-init** - each VM gets a unique, auto-generated cloud-init seed
-  (hostname, user, SSH key, networking, packages, tmate).
-- **tmate SSH** - the bot boots the VM, waits for networking, starts tmate and
-  sends the private SSH connection only to the VPS owner.
-- **Admin panel** - `/admin` with host resources, overcommit state, VPS listing,
-  start/stop/restart/delete/reinstall/kill, runtime limit changes.
-- **SQLite** - users, VPS instances, deployment jobs, host settings, audit logs.
-- **Fully white-label** - branding comes entirely from `.env`.
+- ✅ White-label branding — name, footer, watermark, socials, colors, avatars
+- ✅ Custom embed system — consistent design across every message
+- ✅ Dynamic presence rotation (`Watching 13 VPS`, `Managing 4 Servers`, ...)
+- ✅ Interactive dashboards with buttons + select menus + confirmation dialogs
+- ✅ Automatic VPS name generation (configurable prefixes/separators)
+- ✅ tmate/SSH provisioning — credentials delivered **only via DM**
+- ✅ Honest resource allocation — validated against real host capacity
+- ✅ Server-side permission checks, input sanitization, no command injection
+- ✅ Parameterized SQLite, schema migrations, audit logs, Discord log channel
 
-## Host requirements
+## Requirements
 
-The bot runs on Linux. With KVM it creates hardware-accelerated VMs; **without
-`/dev/kvm` it automatically falls back to QEMU software emulation (TCG)** - the
-VMs are still real, but noticeably slower. In containers/sandboxes that also
-have no libvirt daemon it runs QEMU **directly** (no daemon at all, `VIRT_BACKEND=auto`
-detects this). This lets the bot work inside containers and sandboxes
-(e.g. CodeSandbox) for testing.
+- Python 3.10+ on a machine with the Docker CLI available
+- A Discord bot token with the `applications.commands` scope
+
+## Quick start
 
 ```bash
-virsh list --all          # optional - only for libvirt/KVM mode
-qemu-system-x86_64 --version
-ls -l /dev/kvm            # optional - only for fast KVM mode
-egrep -c '(vmx|svm)' /proc/cpuinfo   # optional - only for fast KVM mode
-```
-
-Required packages (Debian/Ubuntu):
-
-```bash
-sudo apt update
-sudo apt install -y python3 python3-pip python3-venv \
-    qemu-system-x86 qemu-utils libvirt-clients \
-    cloud-image-utils ssh openssh-client
-sudo systemctl enable --now libvirtd   # only needed for libvirt/KVM mode
-```
-
-If `/dev/kvm` does not exist the bot logs a clear warning and creates VMs using
-QEMU software emulation (TCG). Set `ALLOW_SOFTWARE_EMULATION=false` to refuse
-deployments without KVM instead. When there is no libvirt daemon either, set
-`VIRT_BACKEND=direct` (or leave `auto`) to launch QEMU directly.
-
-### Container / sandbox setup (no libvirt daemon needed)
-
-With `VIRT_BACKEND=auto` the bot automatically runs QEMU directly when the
-libvirt daemon is unreachable, so containers only need the QEMU tooling:
-
-```bash
-sudo apt update
-sudo apt install -y python3 python3-pip qemu-system-x86 qemu-utils \
-    libvirt-clients cloud-image-utils ssh
-
-virsh list --all          # expected: fails to connect (no daemon) -> bot uses direct QEMU
-```
-
-VMs run as your user with SLIRP user networking and get the fixed address
-`10.0.2.15` (reachable from the host via SSH). Software emulation is slow:
-expect a fresh Ubuntu boot to take a long time under TCG.
-
-## Installation
-
-```bash
-git clone https://github.com/Subhanplays/vps-deploy.2.0
-cd vps-bot
-
-python3 -m venv .venv
-source .venv/bin/activate
+# 1. Install dependencies
+python -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 
+# 2. Configure secrets (never commit this file)
 cp .env.example .env
-# edit .env: set DISCORD_TOKEN and your branding
+#   -> set DISCORD_TOKEN
+#   -> optionally ADMIN_USER_IDS / ADMIN_ROLE_IDS
+
+# 3. Customize branding, limits, plans, status (or use /settings later)
+#    edit: bot/config/config.json
+
+# 4. Run
+python bot/main.py
 ```
 
-The bot creates `/var/lib/vpsbot` (disks, instances, keys, database) on first
-run. You can override the paths in `.env`.
-
-### Download the cloud images
-
-```bash
-bash download_images.sh
-```
-
-or manually place the images at the paths in `.env`:
-
-```bash
-mkdir -p /var/lib/vpsbot/images/ubuntu /var/lib/vpsbot/images/debian
-# Ubuntu 24.04 and Debian 12 *generic cloud* qcow2 images
-# rename to ubuntu.qcow2 / debian.qcow2
-```
-
-> Only the *generic cloud* images work with cloud-init.
-
-### Run
-
-```bash
-python3 bot.py
-```
+The bot migrates its SQLite database automatically on first run
+(`data/vps.db` by default).
 
 ## Configuration
 
-Everything is configured via `.env` (see `.env.example`). The essential values
-a provider changes:
+### `bot/config/config.json`
 
-```
-BOT_NAME=
-BOT_STATUS=
-BOT_LOGO=
-BOT_COLOR=
-BOT_FOOTER=
-BOT_WEBSITE=
-BOT_SUPPORT_SERVER=
-```
+The single source of truth for defaults. Highlights:
 
-Runtime-adjustable limits (changeable with `/admin config`):
-
-| Key                  | Meaning                                   |
-|----------------------|-------------------------------------------|
-| `creation_enabled`   | allow/disallow VPS creation               |
-| `ram_overcommit`     | enable/disable RAM overselling            |
-| `cpu_overcommit`     | enable/disable CPU overselling            |
-| `max_allocated_ram`  | max budgeted virtual RAM (GB)             |
-| `max_allocated_cpu`  | max budgeted vCPUs                        |
-| `max_disk_per_vps`   | max virtual disk per VPS (GB)             |
-| `max_vps_per_user`   | VPS limit per user                        |
-
-## Overcommit - important
-
-Overcommit means *virtual allocation* is allowed to exceed *physical
-resources*. The bot always shows both numbers separately and never claims the
-host physically has more than it does:
-
-```
-Physical RAM: 8.0 GB
-Allocated VPS RAM: 96.0 GB
-Maximum Allocation: 120.0 GB
-RAM Overcommit: 🟢 Enabled
-```
-
-For disk there is **no overcommit**: the bot always checks actual free physical
-storage before creating a disk, because sparse QCOW2 files still grow.
-
-## Commands
-
-User:
-
-```
-/vps                    Main menu (create / list / manage)
-/ping                   Latency
-/about                  Bot info
+```jsonc
+{
+  "branding": {           // white-label identity
+    "name": "YourBrand",
+    "footer": "Powered by YourBrand",
+    "website": "", "support_server": "", "docs_url": "", ...
+  },
+  "bot": { "status_type": "watching", "status": "your VPS", "online_status": "online" },
+  "appearance": {         // embed colors + assets
+    "primary_color": "#5865F2", "success_color": "#57F287", ...
+  },
+  "text": {               // every user-facing embed string ("vps_created_title", ...)
+    "vps_created_title": "VPS Created"
+  },
+  "resources": {          // enforced allocation limits
+    "max_ram": "8GB", "max_cpu": 4, "max_disk": "100GB",
+    "max_vps_per_user": 2, "global_vps_limit": 50,
+    "host_headroom_percent": 10
+  },
+  "plans": {              // resource plans; toggle .enabled from /settings
+    "free":  { "name": "Free",  "ram": "2GB",  "cpu": 1, "disk": "10GB",  "enabled": true },
+    "basic": { "name": "Basic", "ram": "4GB",  "cpu": 2, "disk": "25GB",  "enabled": true },
+    "pro":   { "name": "Pro",   "ram": "8GB",  "cpu": 4, "disk": "50GB",  "enabled": true }
+  },
+  "docker": {
+    "container_prefix": "vps",
+    "images": {
+      "ubuntu-22.04": { "name": "Ubuntu 22.04", "image": "ubuntu:22.04", "os": "ubuntu" },
+      "ubuntu-24.04": { "name": "Ubuntu 24.04", "image": "ubuntu:24.04", "os": "ubuntu" },
+      "debian-12":    { "name": "Debian 12",    "image": "debian:bookworm", "os": "debian" }
+    }
+  },
+  "name_generator": {
+    "enabled": true, "prefixes": ["nova", "atlas", "orbit", "cloud", "zenith"],
+    "separator": "-", "random_digits": 4
+  },
+  "access": { "admin_ids": [], "admin_roles": [], "log_channel": 0 }
+}
 ```
 
-Admin (role in `ADMIN_ROLE_ID` or user in `ADMIN_USER_IDS`):
+### `.env` — secrets only
 
-```
-/admin panel            Admin overview + buttons
-/admin vps list         List all VPS
-/admin vps info <id>    VPS details            e.g. /admin vps info VPS-0001
-/admin vps start <id>
-/admin vps stop <id>
-/admin vps restart <id>
-/admin vps kill <id>    Force stop
-/admin vps delete <id>
-/admin vps reinstall <id>
-/admin vps resources    Host resources + overcommit
-/admin config <key> <value>
+```env
+DISCORD_TOKEN=your_token
+ADMIN_USER_IDS=1234567890        # merged with access.admin_ids
+DATABASE_FILE=data/vps.db
+LOG_LEVEL=INFO
+LOG_FILE=logs/bot.log
 ```
 
-## Security notes
+### Runtime via `/settings`
 
-- Only predefined `virsh`/`qemu-img`/`ssh` commands are executed. User input is
-  never passed to a shell and never used to build arbitrary commands.
-- VM names are validated against a strict `[a-z0-9-]` pattern; Discord usernames
-  are never used as VM names (VPS IDs like `VPS-0001` / `vps-0001` are used).
-- Ownership checks: only the owner can start/stop/delete their VPS.
-- Admin authorization for every `/admin` command.
-- Rate limiting, per-user deployment locks, command timeouts.
-- Failed deployments are fully cleaned up (VM, disk, seed, DB record, audit).
-- tmate connection strings are only ever sent to the VPS owner in DMs.
+Every group in `config.json` (General, Appearance, VPS, Docker, Access,
+Security, Status Rotation, Plans) can be edited live with `/settings`
+(admin only). Changes are stored in the `settings` table and override the
+config file immediately.
+
+## Resource honesty
+
+- RAM is enforced with Docker `--memory`
+- CPU is enforced with Docker `--cpus`
+- Disk is enforced with `--storage-opt size=` **when the host storage driver
+  supports quotas** (zfs/btrfs/devicemapper). Otherwise creation still works
+  but a notice is shown that the quota is advisory — the bot never advertises
+  a disk limit that isn't real.
+- Requested allocations are checked against actual host CPU/RAM/disk reported
+  by `docker info`, minus a configurable headroom, *before* anything is created.
+
+## Security
+
+- Secrets (token) live only in `.env`
+- Input is sanitized (`^[a-z0-9][a-z0-9-]{0,62}$` for names/hostnames)
+- Docker runs as argument lists via `asyncio.create_subprocess_exec` — never
+  `shell=True`, never user-built shell strings
+- All SQL is parameterized
+- Every VPS lookup is scoped to the calling user; container IDs are never
+  accepted from users for discovery
+- Destructive actions (`delete`, `reinstall`, `kill-all`) require confirmation
+- Admin permissions checked server-side (`access.admin_ids` / `admin_roles`)
+- SSH sessions are stored and only ever sent as DMs
 
 ## Project layout
 
 ```
-vps-bot/
-├── bot.py            Discord bot + UI
-├── config.py         configuration loader
-├── database.py       SQLite layer
-├── vps.py            virsh/KVM operations + resource checks
-├── cloud_init.py     per-VPS cloud-init generation
-├── tmate.py          SSH + tmate session handling
-├── requirements.txt
-├── .env.example
-├── README.md
-├── download_images.sh
-└── images/
-    ├── ubuntu/
-    └── debian/
+bot/
+├── main.py              entry point, cog loading, error handling
+├── app.py               dependency container
+├── config/              config.json + Settings (white-label + DB overrides)
+├── database/            SQLite, migrations, models/repositories
+├── docker/              Docker CLI, container spec, stats/host resources
+├── vps/                 business logic: create/manage/ss/status sync
+│   ├── manager.py       VPS lifecycle + name generator
+│   ├── resources.py     parsing + host/config validation + plans
+│   └── ssh.py           tmate install + session capture
+├── ui/                  embeds, buttons, selects, modals, renderer
+├── services/            status rotation, audit logging, cleanup, value parser
+└── commands/            user.py, vps.py, admin.py, settings.py
 ```
+
+## Deployment notes
+
+- Grant the bot `Send Messages`, `Embed Links`, `Use Slash Commands`.
+- The bot must be able to talk to Docker: run it on the Docker host, or mount
+  the Docker socket and install the CLI in the container.
+- tmate provisioning inside containers requires the container to reach the
+  internet (`apt-get update` / tmate servers). `--privileged` containers with
+  `--cap-add=ALL` are the default (configurable via `docker.privileged`).
+- Timescales: image pull + package install can take 1–3 minutes on first
+  create; tune `ssh.*` timeouts in config.
+
+## License
+
+Free to use and rebrand — that's the point.

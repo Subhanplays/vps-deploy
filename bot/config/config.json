@@ -1,0 +1,212 @@
+{
+  "branding": {
+    "name": "YourBrand",
+    "short_name": "YB",
+    "description": "A modern Discord VPS management platform.",
+    "footer": "Powered by YourBrand",
+    "watermark": "YourBrand VPS",
+    "website": "",
+    "support_server": "",
+    "docs_url": "",
+    "invite_url": "",
+    "youtube": "",
+    "github": "",
+    "developer_text": "Operated by YourBrand",
+    "avatar_url": "",
+    "banner_url": ""
+  },
+
+  "bot": {
+    "status_type": "watching",
+    "status": "your VPS",
+    "online_status": "online"
+  },
+
+  "status_rotation": {
+    "enabled": true,
+    "interval": 30,
+    "messages": [
+      "Watching {vps_count} VPS",
+      "Watching {user_count} Users",
+      "Managing {running_vps} Servers",
+      "Hosting {vps_count} VPS on Docker"
+    ]
+  },
+
+  "appearance": {
+    "primary_color": "#5865F2",
+    "success_color": "#57F287",
+    "error_color": "#ED4245",
+    "warning_color": "#FEE75C",
+    "info_color": "#00A8FC",
+    "footer_icon": "",
+    "author_name": "",
+    "author_icon": "",
+    "thumbnail_url": "",
+    "image_url": "",
+    "show_timestamp": true
+  },
+
+  "text": {
+    "vps_created_title": "VPS Created",
+    "vps_created_desc": "Your VPS has been deployed and is ready to use.",
+    "vps_created_dm_note": "Your access details have been sent to your DMs.",
+    "vps_created_label": "SSH Access",
+
+    "vps_deleted_title": "VPS Deleted",
+    "vps_deleted_desc": "Your VPS has been permanently removed.",
+
+    "ssh_title": "SSH Access",
+    "ssh_desc": "Your new SSH session has been generated.",
+    "ssh_warning": "Keep this information private.",
+    "ssh_dm_sent": "New SSH session sent to your DMs.",
+    "ssh_dm_failed": "Could not send to DMs. Your privacy settings may block the bot. Please enable DMs from server members.",
+
+    "dashboard_title": "Your VPS Dashboard",
+    "dashboard_welcome": "Welcome back, {user}",
+    "dashboard_prompt": "Select an action below.",
+    "dashboard_no_vps": "You don't have any VPS yet. Use /create to deploy your first one.",
+
+    "manage_title": "VPS Management",
+    "manage_prompt": "What would you like to do with this VPS?",
+
+    "info_title": "VPS Information",
+    "stats_title": "Live Statistics",
+    "logs_title": "VPS Logs",
+
+    "confirm_delete_title": "Delete VPS?",
+    "confirm_delete_desc": "This permanently removes:\n\n**{name}**\nRAM: {ram}\nCPU: {cpu} cores\nDisk: {disk}\n\nThis action **cannot be undone**.",
+
+    "create_select_os_title": "Create a VPS",
+    "create_select_os_desc": "Select an operating system to get started.",
+    "create_select_plan_title": "Choose a Plan",
+    "create_select_plan_desc": "Choose a resource plan, or configure custom resources.",
+    "create_resources_title": "Configure Resources",
+    "create_resources_desc": "Enter the resources for your VPS.\nName is optional - a name will be generated for you.",
+    "create_started": "Creating your VPS...",
+    "create_started_eta": "Provisioning usually takes about a minute.",
+    "create_cancel": "Cancelled.",
+
+    "error_title": "Something went wrong",
+    "error_desc": "{action} failed.",
+    "error_reason": "Reason",
+    "error_contact": "Please contact support if this continues.",
+
+    "help_title": "Help Center",
+    "help_desc": "Select a category to learn more about {name}.",
+
+    "about_title": "About {name}",
+    "about_desc": "{description}",
+
+    "ping_title": "Pong!",
+    "ping_desc": "Latency: **{latency}ms**",
+
+    "list_title": "Your VPS Instances",
+    "list_empty": "You have no VPS instances. Use /create to deploy one."
+  },
+
+  "vps": {
+    "default_ram": "2GB",
+    "default_cpu": 1,
+    "default_disk": "10GB",
+    "max_ram": "8GB",
+    "max_cpu": 4,
+    "max_disk": "100GB",
+    "max_per_user": 2,
+    "global_limit": 50,
+    "creation_cooldown": 60,
+    "default_os": "ubuntu-22.04",
+    "allow_custom_name": true,
+    "hostname_prefix": "node"
+  },
+
+  "resources": {
+    "max_ram": "8GB",
+    "max_cpu": 4,
+    "max_disk": "100GB",
+    "max_vps_per_user": 2,
+    "global_vps_limit": 50,
+    "host_headroom_percent": 10,
+    "cpu_oversubscribe": 1.0,
+    "ram_oversubscribe": 1.0
+  },
+
+  "plans": {
+    "free": {
+      "name": "Free",
+      "ram": "2GB",
+      "cpu": 1,
+      "disk": "10GB",
+      "enabled": true
+    },
+    "basic": {
+      "name": "Basic",
+      "ram": "4GB",
+      "cpu": 2,
+      "disk": "25GB",
+      "enabled": true
+    },
+    "pro": {
+      "name": "Pro",
+      "ram": "8GB",
+      "cpu": 4,
+      "disk": "50GB",
+      "enabled": true
+    }
+  },
+
+  "docker": {
+    "container_prefix": "vps",
+    "restart_policy": "unless-stopped",
+    "privileged": true,
+    "cap_add": ["ALL"],
+    "storage_opt_size": true,
+    "entrypoint": ["tail", "-f", "/dev/null"],
+    "images": {
+      "ubuntu-22.04": { "name": "Ubuntu 22.04", "image": "ubuntu:22.04", "os": "ubuntu" },
+      "ubuntu-24.04": { "name": "Ubuntu 24.04", "image": "ubuntu:24.04", "os": "ubuntu" },
+      "debian-12":    { "name": "Debian 12",    "image": "debian:bookworm", "os": "debian" }
+    }
+  },
+
+  "name_generator": {
+    "enabled": true,
+    "prefixes": ["nova", "atlas", "orbit", "cloud", "zenith"],
+    "separator": "-",
+    "random_digits": 4
+  },
+
+  "access": {
+    "admin_ids": [],
+    "admin_roles": [],
+    "log_channel": 0,
+    "support_channel": 0,
+    "dm_ssh": true
+  },
+
+  "security": {
+    "creation_cooldown": 60,
+    "confirm_destructive": true,
+    "sanitize_names": true
+  },
+
+  "ssh": {
+    "install_timeout": 240,
+    "session_timeout": 45,
+    "wait_after_install": 10,
+    "packages": ["tmate", "curl", "wget", "sudo", "openssh-client", "nano", "htop", "git"]
+  },
+
+  "logging": {
+    "level": "INFO",
+    "file": "logs/bot.log",
+    "discord_channel": 0
+  },
+
+  "system": {
+    "status_interval": 30,
+    "sync_interval": 60,
+    "cleanup_interval": 600,
+    "audit_log_retention_days": 90
+  }
+}

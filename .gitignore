@@ -1,17 +1,20 @@
-# Secrets
+# Dependencies
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment / secrets - never commit
 .env
 
 # Runtime data
-/var/
-*.db
+data/
+logs/
 *.log
-__pycache__/
-*.pyc
 
-# SSH keys
-id_vpsbot
-id_vpsbot.pub
-
-# Local test residue
-.venv/
-venv/
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
