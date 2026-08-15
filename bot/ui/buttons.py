@@ -97,7 +97,7 @@ class DashboardView(_OwnerCheckView):
             self.add_item(ManageButton(self))
             self.add_item(StatsButton(self))
             self.add_item(InfoButton(self))
-            self.add_item(SSHButton(self))
+            self.add_item(SSHButton(self, row=1))
             self.add_item(LogsButton(self, row=2))
             self.add_item(RegenButton(self, row=2))
             self.add_item(DeleteButton(self, row=2))
@@ -731,7 +731,7 @@ class AdminDashboardView(_OwnerCheckView):
 # ==========================================================================
 class CategorySelect(discord.ui.Select):
     def __init__(self, view: SettingsView):
-        self.view = view
+        self._view = view
         options = [
             discord.SelectOption(label=name, value=name, description=f"{len(items)} settings")
             for name, items in view.groups.items()
@@ -747,7 +747,7 @@ class CategorySelect(discord.ui.Select):
 
 class SettingSelect(discord.ui.Select):
     def __init__(self, view: SettingsView):
-        self.view = view
+        self._view = view
         options = []
         for name, label, kind in view._all_items()[:25]:
             options.append(discord.SelectOption(label=label[:100], value=name, description=f"{kind} • {name}"[:100]))
@@ -767,7 +767,7 @@ class _Button(discord.ui.Button):
     view: _OwnerCheckView
 
     def __init__(self, view, label, style=discord.ButtonStyle.secondary, row=None, emoji=None):
-        self.view = view
+        self._view = view
         super().__init__(label=label, style=style, row=row, emoji=emoji)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:

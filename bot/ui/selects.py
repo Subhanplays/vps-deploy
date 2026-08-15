@@ -9,7 +9,7 @@ class VPSSelect(discord.ui.Select):
     """Pick one of the caller's VPS instances."""
 
     def __init__(self, view, vps_list: list[dict]):
-        self.view = view
+        self._view = view
         options = []
         for vps in vps_list[:25]:
             label = vps["name"][:100]
@@ -40,7 +40,7 @@ class OSSelect(discord.ui.Select):
     """Pick an operating system image from the configured image map."""
 
     def __init__(self, view, images: dict, placeholder: str = "Select an operating system…"):
-        self.view = view
+        self._view = view
         options = [
             discord.SelectOption(
                 label=image["name"][:100],
@@ -62,7 +62,7 @@ class PlanSelect(discord.ui.Select):
     """Pick a resource plan, or choose 'custom' to enter your own resources."""
 
     def __init__(self, view, plans: dict, include_custom: bool = True):
-        self.view = view
+        self._view = view
         options = []
         for key, plan in plans.items():
             options.append(
@@ -95,7 +95,7 @@ class HelpCategorySelect(discord.ui.Select):
     }
 
     def __init__(self, view):
-        self.view = view
+        self._view = view
         options = [
             discord.SelectOption(label=label, value=key, description=desc[:100])
             for key, (label, desc) in self.CATEGORIES.items()

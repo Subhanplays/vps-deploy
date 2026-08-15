@@ -40,7 +40,7 @@ class SSHFlowView(_OwnerCheckView):
 
 class SSHGenerateButton(discord.ui.Button):
     def __init__(self, view, row=4):
-        self.view = view
+        self._view = view
         super().__init__(label="Generate SSH", style=discord.ButtonStyle.success, emoji="🔐", row=row)
 
     async def callback(self, interaction: discord.Interaction):
