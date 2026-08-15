@@ -35,13 +35,16 @@ Discord -> /vps -> Create VPS -> OS -> RAM -> Storage -> CPU -> Confirm
 
 ## Host requirements
 
-This bot must run on a Linux host with KVM support. It does **not** fake KVM.
+The bot runs on Linux. With KVM it creates hardware-accelerated VMs; **without
+`/dev/kvm` it automatically falls back to QEMU software emulation (TCG)** - the
+VMs are still real, but noticeably slower. This lets it also run inside
+containers and sandboxes (e.g. CodeSandbox) for testing.
 
 ```bash
-ls -l /dev/kvm            # must exist
-egrep -c '(vmx|svm)' /proc/cpuinfo   # > 0
 virsh list --all          # libvirt working
 qemu-system-x86_64 --version
+ls -l /dev/kvm            # optional - only for fast KVM mode
+egrep -c '(vmx|svm)' /proc/cpuinfo   # optional - only for fast KVM mode
 ```
 
 Required packages (Debian/Ubuntu):
@@ -49,12 +52,38 @@ Required packages (Debian/Ubuntu):
 ```bash
 sudo apt update
 sudo apt install -y python3 python3-pip python3-venv \
-    qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients \
+    qemu-system-x86 qemu-utils libvirt-clients \
     cloud-image-utils ssh openssh-client
 sudo systemctl enable --now libvirtd
 ```
 
-If `/dev/kvm` does not exist the bot logs a clear warning and refuses to deploy.
+If `/dev/kvm` does not exist the bot logs a clear warning and creates VMs using
+QEMU software emulation (TCG). Set `ALLOW_SOFTWARE_EMULATION=false` to refuse
+deployments without KVM instead.
+
+### Container / sandbox setup (no systemd, no root)
+
+In a container (like CodeSandbox) use libvirt in per-user **session** mode via
+the modular `virtqemud` daemon (`libvirtd` has no `--session` flag on older
+releases). The VMs run as your user with QEMU software emulation:
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-pip qemu-system-x86 qemu-utils \
+    libvirt-clients cloud-image-utils ssh \
+    libvirt-daemon-driver-qemu      # provides virtqemud (session daemon)
+
+# start the per-user QEMU daemon (helper script in this repo)
+bash start_session_libvirt.sh
+# or manually:
+#   virtlogd --session &
+#   virtqemud --session &
+
+virsh -c qemu:///session list --all     # should work now
+```
+
+Then in `.env` set `LIBVIRT_URI=qemu:///session`. Software emulation is slow:
+expect a fresh Ubuntu boot to take a long time under TCG.
 
 ## Installation
 

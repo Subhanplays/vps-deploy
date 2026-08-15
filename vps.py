@@ -13,10 +13,15 @@ import os
 import re
 import shutil
 import subprocess
+import time
 
 from config import config
 import database as db
 import cloud_init
+
+# libvirt session/system connection. qemu:///session lets the bot create real
+# QEMU VMs in containers/sandboxes without root or a system libvirtd service.
+os.environ.setdefault("LIBVIRT_DEFAULT_URI", config.libvirt_uri)
 
 # Only these characters are ever allowed in a VM name.
 _SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -78,7 +83,14 @@ def _emulator():
 def check_environment():
     """Return a list of (ok: bool, message: str) host capability checks."""
     checks = []
-    checks.append((os.path.exists("/dev/kvm"), "KVM acceleration (/dev/kvm) available"))
+    if host_kvm_available():
+        checks.append((True, "KVM acceleration (/dev/kvm) available"))
+    elif config.allow_software_emulation:
+        checks.append((True, "KVM unavailable - using QEMU software emulation (TCG, slower)"))
+    else:
+        checks.append((False, "KVM acceleration (/dev/kvm) unavailable and software emulation is disabled"))
+    emulator = _emulator()
+    checks.append((os.path.exists(emulator), f"QEMU emulator ({emulator}) installed"))
     checks.append((shutil.which("virsh") is not None, "virsh (libvirt) installed"))
     checks.append((shutil.which("qemu-img") is not None, "qemu-img installed"))
     checks.append((shutil.which("cloud-localds") is not None, "cloud-localds (cloud-image-utils) installed"))
@@ -91,7 +103,19 @@ def check_environment():
 
 
 def host_kvm_available():
-    return os.path.exists("/dev/kvm")
+    return os.path.exists("/dev/kvm") and not config.force_software_emulation
+
+
+def acceleration():
+    """Return 'kvm' or 'tcg' (QEMU software emulation).
+
+    TCG runs real QEMU VMs without /dev/kvm (usable in containers and
+    sandboxes). It is slower than hardware-accelerated KVM but still a real
+    virtual machine, never a fake.
+    """
+    if host_kvm_available():
+        return "kvm"
+    return "tcg"
 
 
 def physical_resources():
@@ -146,6 +170,7 @@ def physical_resources():
         "storage_gb": storage_gb,
         "free_gb": free_gb,
         "kvm": host_kvm_available(),
+        "acceleration": acceleration(),
     }
 
 
@@ -168,6 +193,8 @@ def allocation_state():
         "max_disk_per_vps": db.settings_float("max_disk_per_vps", config.max_disk_per_vps),
         "creation_enabled": db.settings_bool("creation_enabled", True),
         "kvm": phys["kvm"],
+        "acceleration": phys["acceleration"],
+        "software_emulation": phys["acceleration"] == "tcg",
     }
 
 
@@ -185,8 +212,8 @@ def check_spec(os_name, cpu, ram, disk):
 
     if os_name not in config.image_map:
         return False, "Unsupported operating system."
-    if not state["kvm"]:
-        return False, "KVM acceleration is unavailable on this host."
+    if not state["kvm"] and not config.allow_software_emulation:
+        return False, "KVM acceleration is unavailable and software emulation is disabled on this host."
     if not state["creation_enabled"]:
         return False, "VPS creation is currently disabled by an administrator."
     if not 1 <= cpu <= config.max_cpu_per_vps:
@@ -314,10 +341,10 @@ async def create_vm(vps, pubkey, progress=None):
 
     code, out, err = _run(["virsh", "define", xml_path], timeout=30)
     if code != 0:
-        raise VpsError(f"Failed to define KVM virtual machine: {err}")
+        raise VpsError(f"Failed to define virtual machine: {err}")
 
     if progress:
-        await progress("✅ Creating KVM virtual machine")
+        await progress("✅ Creating virtual machine")
 
     code, out, err = _virsh("start", vm_name)
     if code != 0:
@@ -331,6 +358,14 @@ async def create_vm(vps, pubkey, progress=None):
 async def wait_for_ip(vm_name, timeout=180, progress=None):
     """Poll libvirt DHCP leases / ARP until the VM has an IPv4 address."""
     _check_name(vm_name)
+    # In software emulation mode the VM uses QEMU user-mode (SLIRP) networking
+    # where the guest is always given the fixed 10.0.2.15 address and libvirt
+    # tracks no DHCP lease, so there is nothing to poll.
+    if acceleration() == "tcg":
+        await asyncio.sleep(5)
+        if progress:
+            await progress("✅ Configuring network")
+        return config.slirp_ip
     start = time.monotonic()
     while time.monotonic() - start < timeout:
         mac = _vm_mac(vm_name)
@@ -358,21 +393,34 @@ def _vm_mac(vm_name):
 
 
 def _domain_xml(vm_name, vm_uuid, ram_kib, vcpu, disk_path, seed_path):
-    if config.bridge_name:
-        iface = (
-            f"    <interface type='bridge'>\n"
-            f"      <source bridge='{config.bridge_name}'/>\n"
-            f"      <model type='virtio'/>\n"
-            f"    </interface>"
-        )
+    accel = acceleration()
+    if accel == "kvm":
+        cpu_xml = "  <cpu mode='host-passthrough' check='none'/>\n"
+        if config.bridge_name:
+            iface = (
+                f"    <interface type='bridge'>\n"
+                f"      <source bridge='{config.bridge_name}'/>\n"
+                f"      <model type='virtio'/>\n"
+                f"    </interface>"
+            )
+        else:
+            iface = (
+                f"    <interface type='network'>\n"
+                f"      <source network='{config.network_name}'/>\n"
+                f"      <model type='virtio'/>\n"
+                f"    </interface>"
+            )
     else:
+        # QEMU user-mode (SLIRP) networking: no host bridge / firewall rules
+        # needed, works inside containers. Guest is always 10.0.2.15.
+        cpu_xml = ""
         iface = (
-            f"    <interface type='network'>\n"
-            f"      <source network='{config.network_name}'/>\n"
-            f"      <model type='virtio'/>\n"
-            f"    </interface>"
+            "    <interface type='user'>\n"
+            "      <model type='virtio'/>\n"
+            "    </interface>"
         )
-    return f"""<domain type='kvm'>
+    domain_type = "kvm" if accel == "kvm" else "qemu"
+    return f"""<domain type='{domain_type}'>
   <name>{vm_name}</name>
   <uuid>{vm_uuid}</uuid>
   <memory unit='KiB'>{ram_kib}</memory>
@@ -386,8 +434,7 @@ def _domain_xml(vm_name, vm_uuid, ram_kib, vcpu, disk_path, seed_path):
     <acpi/>
     <apic/>
   </features>
-  <cpu mode='host-passthrough' check='none'/>
-  <clock offset='utc'/>
+{cpu_xml}  <clock offset='utc'/>
   <on_poweroff>destroy</on_poweroff>
   <on_reboot>restart</on_reboot>
   <on_crash>destroy</on_crash>

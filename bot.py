@@ -107,7 +107,7 @@ DEPLOY_STEPS = [
     "Allocating resources",
     "Creating virtual disk",
     "Configuring cloud-init",
-    "Creating KVM virtual machine",
+    "Creating virtual machine",
     "Starting VPS",
     "Configuring network",
     "Installing tmate",
@@ -645,6 +645,12 @@ async def deploy_vps(interaction: discord.Interaction, spec):
                         interaction, spec, vps, update_embed, progress
                     )
                     os_name = config.os_names.get(spec["os"], spec["os"].title())
+                    emu_note = ""
+                    if vpslib.acceleration() == "tcg":
+                        emu_note = (
+                            "\n⚠️ **Software emulation mode** - this VPS runs via QEMU TCG "
+                            "(no /dev/kvm), so it will be slower than a hardware-accelerated VPS.\n"
+                        )
                     success = brand_embed(
                         title="✅ VPS Successfully Created",
                         description=(
@@ -654,6 +660,7 @@ async def deploy_vps(interaction: discord.Interaction, spec):
                             f"RAM: {spec['ram']} GB\n"
                             f"Storage: {spec['disk']} GB\n"
                             f"Status: 🟢 Online\n"
+                            f"{emu_note}"
                         ),
                         color=discord.Color.green(),
                     )
@@ -1010,6 +1017,14 @@ def build_host_resources_embed():
         ),
         inline=False,
     )
+    embed.add_field(
+        name="Virtualization",
+        value=(
+            f"Acceleration: {'🟢 KVM' if state['acceleration'] == 'kvm' else '🟡 Software emulation (TCG)'}\n"
+            f"Mode: {'hardware-accelerated' if state['acceleration'] == 'kvm' else 'QEMU software emulation (slower)'}"
+        ),
+        inline=False,
+    )
     counts = db.vps_counts()
     embed.add_field(
         name="VPS",
@@ -1093,7 +1108,8 @@ async def about(interaction: discord.Interaction):
     )
     embed.add_field(name="Status", value="🟢 Online", inline=True)
     embed.add_field(name="Framework", value="Python • discord.py", inline=True)
-    embed.add_field(name="Virtualization", value="KVM/QEMU • libvirt", inline=True)
+    accel = "KVM/QEMU • libvirt" if vpslib.acceleration() == "kvm" else "QEMU (software emulation) • libvirt"
+    embed.add_field(name="Virtualization", value=accel, inline=True)
     if config.bot_website:
         embed.add_field(name="Website", value=config.bot_website, inline=True)
     if config.bot_support:
@@ -1452,7 +1468,10 @@ async def on_ready():
         for issue in issues:
             logger.warning("  - %s", issue)
     if not vpslib.host_kvm_available():
-        logger.warning("/dev/kvm does not exist - KVM acceleration unavailable!")
+        if config.allow_software_emulation:
+            logger.warning("/dev/kvm does not exist - running in QEMU software emulation (TCG) mode. VMs are real but slower.")
+        else:
+            logger.warning("/dev/kvm does not exist - KVM acceleration unavailable and software emulation is disabled!")
     try:
         synced = await bot.tree.sync()
         logger.info("Synced %d commands", len(synced))

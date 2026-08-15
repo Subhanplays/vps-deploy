@@ -131,11 +131,25 @@ class Config:
         self.initial_user = os.getenv("INITIAL_USER", "user")
 
         # ------------------------------------------------------------------
-        # Behaviour
+        # Virtualization behaviour
         # ------------------------------------------------------------------
         self.tmate_enabled = _bool("TMATE_ENABLED", "true")
         self.deploy_timeout = _int("DEPLOY_TIMEOUT", 600)
         self.rate_limit_seconds = _int("RATE_LIMIT_SECONDS", 60)
+
+        # QEMU software emulation (TCG) fallback for hosts without /dev/kvm
+        # (containers, sandboxes, VPSs without nested virtualization). These
+        # are still real QEMU VMs, just slow and clearly labelled as such.
+        self.allow_software_emulation = _bool("ALLOW_SOFTWARE_EMULATION", "true")
+        # Force software emulation even when KVM is present (testing).
+        self.force_software_emulation = _bool("FORCE_SOFTWARE_EMULATION", "false")
+        # libvirt connection URI. Use qemu:///session in containers/sandboxes
+        # where the system libvirtd service is not available.
+        self.libvirt_uri = os.getenv("LIBVIRT_URI", "qemu:///system")
+        # Fixed guest IP assigned by QEMU user-mode networking (SLIRP), used
+        # only in software emulation mode.
+        self.slirp_ip = os.getenv("SLIRP_IP", "10.0.2.15")
+
         self.image_map = {
             "ubuntu": self.ubuntu_image,
             "debian": self.debian_image,
