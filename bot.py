@@ -120,7 +120,7 @@ class Progress:
         self.steps = steps
         self.current = 0
 
-    def mark(self, step_text):
+    async def mark(self, step_text):
         cleaned = step_text.lstrip("✅🔄⏳🔲 ").strip().lower()
         for i, step in enumerate(self.steps):
             if step.lower() == cleaned:

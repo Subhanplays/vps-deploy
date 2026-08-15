@@ -9,17 +9,23 @@
 
 set -e
 
-if ! command -v virtqemud >/dev/null 2>&1; then
+# The daemons live in /usr/sbin, which is often not on a non-root user's PATH.
+VIRTQEMUD="$(command -v virtqemud || true)"
+[ -z "$VIRTQEMUD" ] && [ -x /usr/sbin/virtqemud ] && VIRTQEMUD=/usr/sbin/virtqemud
+VIRTLOGD="$(command -v virtlogd || true)"
+[ -z "$VIRTLOGD" ] && [ -x /usr/sbin/virtlogd ] && VIRTLOGD=/usr/sbin/virtlogd
+
+if [ -z "$VIRTQEMUD" ]; then
     echo "ERROR: virtqemud not found. Install it first:"
     echo "  sudo apt update && sudo apt install -y libvirt-daemon-driver-qemu"
     exit 1
 fi
 
-if command -v virtlogd >/dev/null 2>&1; then
-    virtlogd --session >/dev/null 2>&1 || true
+if [ -n "$VIRTLOGD" ]; then
+    "$VIRTLOGD" --session >/dev/null 2>&1 || true
 fi
 
-virtqemud --session >/dev/null 2>&1 || true
+"$VIRTQEMUD" --session >/dev/null 2>&1 || true
 
 sleep 1
 
