@@ -131,9 +131,29 @@ def acceleration():
 # the bot can launch real QEMU processes directly. SLIRP user networking
 # gives the guest the fixed 10.0.2.15 address, reachable from the host.
 # --------------------------------------------------------------------------
+def _libvirt_socket_candidates():
+    """Possible libvirt daemon socket paths for the configured URI."""
+    uri = os.environ.get("LIBVIRT_DEFAULT_URI", "")
+    if "session" in uri:
+        base = os.environ.get("XDG_RUNTIME_DIR") or os.path.join("/run/user", str(os.getuid()))
+        run_libvirt = os.path.join(base, "libvirt")
+    else:
+        run_libvirt = "/var/run/libvirt"
+    return [
+        os.path.join(run_libvirt, "libvirt-sock"),
+        os.path.join(run_libvirt, "virtqemud-sock"),
+    ]
+
+
 def _virsh_reachable():
-    """Cheap check whether virsh can talk to the configured libvirt URI."""
+    """Cheap check whether virsh can talk to the configured libvirt URI.
+
+    Avoids spawning virsh when no daemon socket exists (common in
+    containers/sandboxes) so this stays fast and never blocks the bot.
+    """
     if shutil.which("virsh") is None:
+        return False
+    if not any(os.path.exists(p) for p in _libvirt_socket_candidates()):
         return False
     try:
         code, _, _ = _run(["virsh", "list"], timeout=10)
@@ -142,17 +162,25 @@ def _virsh_reachable():
         return False
 
 
+_USE_DIRECT_CACHE = None
+
+
 def use_direct():
     """True when VMs should be launched directly by QEMU (no libvirt)."""
+    global _USE_DIRECT_CACHE
     if config.virt_backend == "virsh":
         return False
     if config.virt_backend == "direct":
         return True
     # auto: prefer virsh when KVM is available or a daemon answers, else
     # fall back to direct QEMU.
+    if _USE_DIRECT_CACHE is not None:
+        return _USE_DIRECT_CACHE
     if host_kvm_available():
-        return False
-    return not _virsh_reachable()
+        _USE_DIRECT_CACHE = False
+    else:
+        _USE_DIRECT_CACHE = not _virsh_reachable()
+    return _USE_DIRECT_CACHE
 
 
 def _instance_meta(vm_name):
@@ -523,13 +551,15 @@ async def create_vm(vps, pubkey, progress=None):
         await progress("✅ Allocating resources")
 
     # Create the sparse QCOW2 overlay. Its *virtual* size is the requested
-    # disk size; the physical file only grows as data is written.
-    code, out, err = _run(
+    # disk size; the physical file only grows as data is written. Run in a
+    # thread so the Discord event loop is never blocked.
+    code, out, err = await asyncio.to_thread(
+        _run,
         [
             "qemu-img", "create", "-f", "qcow2", "-F", "qcow2",
             "-b", base_image, disk_path, f"{disk_gb}G",
         ],
-        timeout=120,
+        120,
     )
     if code != 0:
         raise VpsError(f"Failed to create virtual disk: {err}")
@@ -538,7 +568,9 @@ async def create_vm(vps, pubkey, progress=None):
         await progress("✅ Creating virtual disk")
 
     try:
-        seed_path = cloud_init.write_seed(instance_dir, vm_name, pubkey)
+        seed_path = await asyncio.to_thread(
+            cloud_init.write_seed, instance_dir, vm_name, pubkey
+        )
     except RuntimeError as exc:
         raise VpsError(str(exc))
 
@@ -553,7 +585,9 @@ async def create_vm(vps, pubkey, progress=None):
     if use_direct():
         if progress:
             await progress("✅ Creating virtual machine")
-        direct_launch(vm_name, vm_uuid, ram_kib, vps["cpu"], disk_path, seed_path)
+        await asyncio.to_thread(
+            direct_launch, vm_name, vm_uuid, ram_kib, vps["cpu"], disk_path, seed_path
+        )
         if progress:
             await progress("✅ Starting VPS")
         return disk_path, seed_path, instance_dir
@@ -564,14 +598,14 @@ async def create_vm(vps, pubkey, progress=None):
     with open(xml_path, "w") as fh:
         fh.write(xml)
 
-    code, out, err = _run(["virsh", "define", xml_path], timeout=30)
+    code, out, err = await asyncio.to_thread(_run, ["virsh", "define", xml_path], 30)
     if code != 0:
         raise VpsError(f"Failed to define virtual machine: {err}")
 
     if progress:
         await progress("✅ Creating virtual machine")
 
-    code, out, err = _virsh("start", vm_name)
+    code, out, err = await asyncio.to_thread(_virsh, "start", vm_name)
     if code != 0:
         raise VpsError(f"Failed to start the virtual machine: {err}")
 
@@ -698,10 +732,10 @@ def _domain_xml(vm_name, vm_uuid, ram_kib, vcpu, disk_path, seed_path):
 async def start_vm(vm_name):
     _check_name(vm_name)
     if use_direct():
-        return direct_start(vm_name)
+        return await asyncio.to_thread(direct_start, vm_name)
     if status_of(vm_name) == "running":
         return True
-    code, out, err = _virsh("start", vm_name)
+    code, out, err = await asyncio.to_thread(_virsh, "start", vm_name)
     return code == 0
 
 
@@ -709,8 +743,8 @@ async def stop_vm(vm_name, timeout=60):
     """Graceful ACPI shutdown, escalating to a forced destroy."""
     _check_name(vm_name)
     if use_direct():
-        return direct_stop(vm_name, timeout)
-    code, out, err = _virsh("shutdown", vm_name)
+        return await asyncio.to_thread(direct_stop, vm_name, timeout)
+    code, out, err = await asyncio.to_thread(_virsh, "shutdown", vm_name)
     if code != 0:
         # Not running or already off.
         return status_of(vm_name) != "running"
@@ -727,16 +761,16 @@ async def kill_vm(vm_name):
     """Force stop (virsh destroy)."""
     _check_name(vm_name)
     if use_direct():
-        return direct_kill(vm_name)
-    code, out, err = _virsh("destroy", vm_name)
+        return await asyncio.to_thread(direct_kill, vm_name)
+    code, out, err = await asyncio.to_thread(_virsh, "destroy", vm_name)
     return code == 0
 
 
 async def restart_vm(vm_name):
     _check_name(vm_name)
     if use_direct():
-        return direct_restart(vm_name)
-    code, out, err = _virsh("reboot", vm_name)
+        return await asyncio.to_thread(direct_restart, vm_name)
+    code, out, err = await asyncio.to_thread(_virsh, "reboot", vm_name)
     if code == 0:
         return True
     # Fall back to stop + start.
@@ -744,15 +778,15 @@ async def restart_vm(vm_name):
     return await start_vm(vm_name)
 
 
-def delete_vm(vm_name):
+async def delete_vm(vm_name):
     """Undefine + destroy the domain and remove its files."""
     _check_name(vm_name)
     if use_direct():
-        direct_kill(vm_name)
+        await asyncio.to_thread(direct_kill, vm_name)
         return
-    _virsh("destroy", vm_name)
-    _virsh("undefine", vm_name)
-    code, out, err = _virsh("domstate", vm_name)
+    await asyncio.to_thread(_virsh, "destroy", vm_name)
+    await asyncio.to_thread(_virsh, "undefine", vm_name)
+    code, out, err = await asyncio.to_thread(_virsh, "domstate", vm_name)
     if code == 0:
         raise VpsError("VM still exists after delete attempt.")
 
@@ -777,7 +811,7 @@ async def cleanup_failed(vps):
     except Exception:
         pass
     try:
-        delete_vm(vps["vm_name"])
+        await delete_vm(vps["vm_name"])
     except Exception:
         pass
     remove_vps_files(vps)

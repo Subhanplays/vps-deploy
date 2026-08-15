@@ -190,7 +190,7 @@ async def _run_deployment(interaction, spec, vps, progress_embed_msg, progress):
     job_id = vps["vps_id"]
     db.create_job(job_id, vps["vps_id"], vps["discord_user_id"])
     db.update_job(job_id, status="running")
-    pubkey = vpslib.ensure_ssh_key()
+    pubkey = await asyncio.to_thread(vpslib.ensure_ssh_key)
     ip_address = None
     tmate_session = None
     try:
@@ -843,7 +843,7 @@ async def run_management_action(interaction, vps, action):
 
 async def _confirm_delete(interaction, vps):
     await interaction.response.defer(ephemeral=True)
-    vpslib.delete_vm(vps["vm_name"])
+    await vpslib.delete_vm(vps["vm_name"])
     vpslib.remove_vps_files(vps)
     db.delete_vps_record(vps["vps_id"])
     db.log_audit(interaction.user.id, "vps_deleted", vps["vps_id"])
@@ -871,10 +871,10 @@ async def _confirm_reinstall(interaction, vps):
         await interaction.edit_original_response(embed=embed)
 
     try:
-        vpslib.delete_vm(vps["vm_name"])
+        await vpslib.delete_vm(vps["vm_name"])
         vpslib.remove_vps_files(vps)
         db.update_vps(vps["vps_id"], status="deploying", tmate_session=None, ip_address=None)
-        pubkey = vpslib.ensure_ssh_key()
+        pubkey = await asyncio.to_thread(vpslib.ensure_ssh_key)
         fresh = db.get_vps_by_vps_id(vps["vps_id"])
         disk_path, seed_path, instance_dir = await vpslib.create_vm(
             fresh, pubkey, progress=progress.mark
@@ -1351,7 +1351,7 @@ async def admin_vps_operate(interaction: discord.Interaction, vps_id: str, actio
     await interaction.response.defer(ephemeral=True)
     try:
         if action == "delete":
-            vpslib.delete_vm(vps["vm_name"])
+            await vpslib.delete_vm(vps["vm_name"])
             vpslib.remove_vps_files(vps)
             db.delete_vps_record(vps["vps_id"])
             db.log_audit(interaction.user.id, "admin_vps_delete", vps["vps_id"])
@@ -1404,10 +1404,10 @@ async def _admin_reinstall(interaction, vps):
         await interaction.edit_original_response(embed=embed)
 
     try:
-        vpslib.delete_vm(vps["vm_name"])
+        await vpslib.delete_vm(vps["vm_name"])
         vpslib.remove_vps_files(vps)
         db.update_vps(vps["vps_id"], status="deploying", tmate_session=None, ip_address=None)
-        pubkey = vpslib.ensure_ssh_key()
+        pubkey = await asyncio.to_thread(vpslib.ensure_ssh_key)
         fresh = db.get_vps_by_vps_id(vps["vps_id"])
         disk_path, seed_path, instance_dir = await vpslib.create_vm(fresh, pubkey, progress=progress.mark)
         db.update_vps(vps["vps_id"], disk_path=disk_path, seed_path=seed_path, instance_dir=instance_dir)
