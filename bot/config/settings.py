@@ -78,6 +78,28 @@ def _safe_format(template: str, **kwargs) -> str:
         return template
 
 
+def _parse_plan_size(value) -> float:
+    """Parse a plan resource value into a number (handles strings like '2GB')."""
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    match = re.match(r"^(\d+(?:\.\d+)?)\s*(?:[KMGTPE])?B?$", str(value).strip(), re.IGNORECASE)
+    if not match:
+        return 0.0
+    return float(match.group(1))
+
+
+def _normalize_plan(plan: dict) -> dict:
+    """Return a plan whose ram/cpu/disk are numbers (floats), never strings."""
+    return {
+        **plan,
+        "ram": _parse_plan_size(plan.get("ram", 0)),
+        "cpu": _parse_plan_size(plan.get("cpu", 0)),
+        "disk": _parse_plan_size(plan.get("disk", 0)),
+    }
+
+
 class _SafeDict(dict):
     def __missing__(self, key):
         return "{" + key + "}"
@@ -281,15 +303,15 @@ class Settings:
     def plan(self, plan_key: str) -> dict | None:
         plans = self.get("plans", {})
         if plan_key in plans:
-            return plans[plan_key]
+            return _normalize_plan(plans[plan_key])
         for key, plan in plans.items():
             if plan.get("name", "").lower() == plan_key.lower():
-                return plan
+                return _normalize_plan(plan)
         return None
 
     def enabled_plans(self) -> dict:
         plans = self.get("plans", {})
-        return {k: v for k, v in plans.items() if v.get("enabled", True)}
+        return {k: _normalize_plan(v) for k, v in plans.items() if v.get("enabled", True)}
 
 
 class _HasRoles:
