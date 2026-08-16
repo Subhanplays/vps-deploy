@@ -150,6 +150,9 @@ class VPSManager:
             if not instance_name:
                 raise VpsError(error or "LXD failed to create the instance.")
 
+            # Track the instance so _abort_creation can delete it if any
+            # later provisioning step fails.
+            container_id = instance_name
             dbm.update_vps_container(self.db, vps_id, instance_name, instance_name)
 
             # Let cloud-init/DHCP finish before installing packages.
