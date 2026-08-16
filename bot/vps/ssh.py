@@ -57,10 +57,10 @@ class SSHManager:
         """
         sock = "/tmp/tmate.sock"
 
-        # Start a detached tmate session (no -F, so nothing blocks and the
-        # process persists even when this method returns).
+        # Kill any stale tmate so a brand-new relay session (and thus a new
+        # ssh string) is minted, then start a detached session.
         bootstrap = (
-            "rm -f {sock}; "
+            "pkill -x tmate; sleep 1; rm -f {sock}; "
             "setsid tmate -S {sock} new-session -d -s main >/dev/null 2>&1 &"
         ).format(sock=sock)
         result = await self.lxd.exec(instance, ["bash", "-c", bootstrap], timeout=20.0)

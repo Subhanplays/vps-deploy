@@ -109,15 +109,14 @@ class ViewRenderer:
                 view=self._keep_view(view),
             )
             return
-        ssh_line = vps["ssh_command"]
-        if not ssh_line:
-            ok, _, ssh_line = await self.app.vps.regenerate_ssh(vps["id"], self.view_owner(view))
-            if not ok:
-                await interaction.edit_original_response(
-                    embed=emb.error_message("ssh", "Failed to generate an SSH session."),
-                    view=self._keep_view(view),
-                )
-                return
+        # Always mint a fresh tmate session so each request gets a new string.
+        ok, msg, ssh_line = await self.app.vps.regenerate_ssh(vps["id"], self.view_owner(view))
+        if not ok:
+            await interaction.edit_original_response(
+                embed=emb.error_message("ssh", msg),
+                view=self._keep_view(view),
+            )
+            return
         user = await self.app.bot.fetch_user(self.view_owner(view))
         sent = await self.dm_ssh(user, ssh_line)
         note = emb.text("ssh_dm_sent", "New SSH session sent to your DMs.") if sent else emb.text("ssh_dm_failed", "Could not send to DMs.")
