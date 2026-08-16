@@ -1,8 +1,10 @@
 """tmate / SSH session provisioning.
 
-The bot installs tmate inside the container, launches a foreground session
-and captures the public ``ssh ...`` connection string. That string is the only
-credential a user needs, and it is only ever delivered via direct message.
+The bot installs tmate inside the container, starts a *detached* tmate session
+in the background and captures the public ``ssh ...`` connection string. The
+session is left running, so the SSH connection stays valid for as long as the
+container is up. The string is the only credential a user needs, and it is
+only ever delivered via direct message.
 """
 
 from __future__ import annotations
@@ -11,8 +13,6 @@ import asyncio
 import logging
 
 logger = logging.getLogger("vpsbot.ssh")
-
-_SSH_MARKER = "ssh session:"
 
 
 class SSHError(Exception):
@@ -50,48 +50,32 @@ class SSHManager:
         return False, last.message or "Failed to install tmate."
 
     async def start_session(self, instance: str) -> tuple[str | None, str]:
-        """Launch tmate and return ``(ssh_line, error_message)``."""
-        proc, err = await self.lxd.exec_stream(instance, ["tmate", "-F"])
-        if err is not None:
-            return None, err.message or "Failed to launch tmate."
-        if proc is None:
-            return None, "Failed to launch tmate."
-        try:
-            ssh_line = await self._capture_session(proc)
-        finally:
-            self._terminate(proc)
-        if not ssh_line:
-            return None, "Timed out waiting for an SSH session."
-        return ssh_line, ""
+        """Start a background tmate session and return ``(ssh_line, error)``.
 
-    async def _capture_session(self, proc: asyncio.subprocess.Process) -> str | None:
-        session_timeout = self.settings.get_int("ssh.session_timeout", 45)
-        loop = asyncio.get_event_loop()
-        deadline = loop.time() + session_timeout
-        streams = [s for s in (proc.stdout, proc.stderr) if s is not None]
-        while loop.time() < deadline:
-            if proc.returncode is not None:
-                break
-            for stream in streams:
-                try:
-                    line = await asyncio.wait_for(stream.readline(), timeout=min(2.0, max(0.1, deadline - loop.time())))
-                except asyncio.TimeoutError:
-                    continue
-                if not line:
-                    continue
-                text = line.decode("utf-8", errors="replace").strip()
-                if _SSH_MARKER in text.lower():
-                    return text.split(_SSH_MARKER)[-1].strip()
-            await asyncio.sleep(0.05)
-        return None
+        The session stays alive after this returns so the delivered SSH string
+        keeps working for the life of the container.
+        """
+        sock = "/tmp/tmate.sock"
 
-    def _terminate(self, proc: asyncio.subprocess.Process) -> None:
-        if proc.returncode is not None:
-            return
-        try:
-            proc.terminate()
-        except Exception:  # noqa: BLE001
-            try:
-                proc.kill()
-            except Exception:  # noqa: BLE001
-                pass
+        # Start a detached tmate session (no -F, so nothing blocks and the
+        # process persists even when this method returns).
+        bootstrap = (
+            "rm -f {sock}; "
+            "setsid tmate -S {sock} new-session -d -s main >/dev/null 2>&1 &"
+        ).format(sock=sock)
+        result = await self.lxd.exec(instance, ["bash", "-c", bootstrap], timeout=20.0)
+        if not result.ok:
+            return None, result.message or "Failed to start tmate."
+
+        # Poll for the connection string; tmate prints it once it has joined
+        # the relay, which normally takes a few seconds.
+        session_timeout = max(10, self.settings.get_int("ssh.session_timeout", 45))
+        deadline = asyncio.get_event_loop().time() + session_timeout
+        cmd = ["bash", "-c", f"tmate -S {sock} display -p '#{{tmate_ssh}}' 2>/dev/null"]
+        while asyncio.get_event_loop().time() < deadline:
+            check = await self.lxd.exec(instance, cmd, timeout=20.0)
+            line = (check.stdout or "").strip()
+            if line.startswith("ssh "):
+                return line, ""
+            await asyncio.sleep(1)
+        return None, "Timed out waiting for an SSH session."
