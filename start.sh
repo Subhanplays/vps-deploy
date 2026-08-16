@@ -101,8 +101,14 @@ if echo "$POOLS" | grep -qx 'default'; then
     ok "pool 'default' already exists"
 elif [ -n "$POOLS" ]; then
     FIRST="$(echo "$POOLS" | head -n1)"
-    lxcrun storage rename "$FIRST" default
-    ok "renamed existing pool '$FIRST' -> default"
+    if lxcrun storage create default dir >/dev/null 2>&1; then
+        ok "created new 'default' pool (dir)"
+        # The old pool is unused (empty host); drop it so 'default' is the one.
+        lxcrun storage delete "$FIRST" >/dev/null 2>&1 || warn "left old pool '$FIRST' in place"
+    else
+        warn "could not create a 'default' pool - you must run: sudo lxd init"
+        exit 1
+    fi
 else
     if command -v zfs >/dev/null 2>&1; then
         lxcrun storage create default zfs
