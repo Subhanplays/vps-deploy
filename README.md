@@ -40,10 +40,11 @@ without touching a single line of Python.
 ## Quick start
 
 ```bash
-# 1. Install dependencies
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+# 1. Install dependencies (on Debian/Ubuntu you may need python3-venv & python3-pip)
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 
 # 2. Configure secrets (never commit this file)
 cp .env.example .env
