@@ -289,7 +289,7 @@ class Settings:
         return is_banned(self._db, user_id)
 
     def image_map(self) -> dict:
-        return self.get("docker.images", {})
+        return self.get("images", {})
 
     def image_by_key(self, os_key: str) -> dict | None:
         images = self.image_map()

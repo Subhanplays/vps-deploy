@@ -29,7 +29,7 @@
       "Watching {vps_count} VPS",
       "Watching {user_count} Users",
       "Managing {running_vps} Servers",
-      "Hosting {vps_count} VPS on Docker"
+      "Hosting {vps_count} VPS on LXD"
     ]
   },
 
@@ -155,18 +155,20 @@
     }
   },
 
-  "docker": {
+  "images": {
+    "ubuntu-22.04": { "name": "Ubuntu 22.04", "image": "ubuntu:22.04", "os": "ubuntu" },
+    "ubuntu-24.04": { "name": "Ubuntu 24.04", "image": "ubuntu:24.04", "os": "ubuntu" },
+    "debian-12":    { "name": "Debian 12",    "image": "images:debian/12", "os": "debian" }
+  },
+
+  "lxd": {
     "container_prefix": "vps",
-    "restart_policy": "unless-stopped",
-    "privileged": true,
-    "cap_add": ["ALL"],
-    "storage_opt_size": true,
-    "entrypoint": ["tail", "-f", "/dev/null"],
-    "images": {
-      "ubuntu-22.04": { "name": "Ubuntu 22.04", "image": "ubuntu:22.04", "os": "ubuntu" },
-      "ubuntu-24.04": { "name": "Ubuntu 24.04", "image": "ubuntu:24.04", "os": "ubuntu" },
-      "debian-12":    { "name": "Debian 12",    "image": "debian:bookworm", "os": "debian" }
-    }
+    "storage_pool": "default",
+    "profiles": ["default"],
+    "autostart": true,
+    "storage_quota": true,
+    "security_privileged": false,
+    "ready_wait": 5
   },
 
   "name_generator": {
@@ -192,6 +194,7 @@
 
   "ssh": {
     "install_timeout": 240,
+    "install_attempts": 2,
     "session_timeout": 45,
     "wait_after_install": 10,
     "packages": ["tmate", "curl", "wget", "sudo", "openssh-client", "nano", "htop", "git"]

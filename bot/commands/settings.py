@@ -53,12 +53,13 @@ SETTING_GROUPS: dict[str, list[tuple[str, str, str]]] = {
         ("vps.creation_cooldown", "Creation cooldown (s)", "int"),
         ("vps.allow_custom_name", "Allow custom names", "bool"),
     ],
-    "Docker": [
-        ("docker.container_prefix", "Container prefix", "str"),
+    "LXD": [
+        ("lxd.container_prefix", "Instance prefix", "str"),
         ("vps.hostname_prefix", "Hostname prefix", "str"),
-        ("docker.restart_policy", "Restart policy", "str"),
-        ("docker.privileged", "Privileged containers", "bool"),
-        ("docker.storage_opt_size", "Enforce disk via storage-opt", "bool"),
+        ("lxd.autostart", "Autostart on boot", "bool"),
+        ("lxd.storage_quota", "Enforce disk quota", "bool"),
+        ("lxd.security_privileged", "Privileged instance", "bool"),
+        ("lxd.storage_pool", "Storage pool name", "str"),
         ("ssh.install_timeout", "Install timeout (s)", "int"),
         ("ssh.session_timeout", "SSH session timeout (s)", "int"),
     ],

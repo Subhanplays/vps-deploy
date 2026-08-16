@@ -12,8 +12,8 @@ from dotenv import load_dotenv
 
 from config.settings import Settings
 from database.database import Database
-from docker.manager import DockerManager
-from docker.stats import StatsService
+from lxd.manager import LxdManager
+from lxd.stats import LxdStatsService
 from services.cleanup import CleanupService
 from services.logging import AuditLogger
 from services.status import StatusService
@@ -40,8 +40,8 @@ class AppContext:
 
         self.version = "2.0.0"
 
-        self.docker = DockerManager(self)
-        self.stats = StatsService(self)
+        self.lxd = LxdManager(self)
+        self.stats = LxdStatsService(self)
         self.resources = ResourceValidator(self)
         self.ssh = SSHManager(self)
         self.audit = AuditLogger(self)

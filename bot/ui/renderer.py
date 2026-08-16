@@ -83,7 +83,7 @@ class ViewRenderer:
         embed.add_field(name="⏱️ Uptime", value=snapshot.get("uptime", "N/A"), inline=True)
         embed.add_field(name="🗓️ Created", value=vps["created_at"], inline=True)
         embed.add_field(name="🆔 ID", value=f"`{vps['id'][:8]}…`", inline=True)
-        embed.add_field(name="🛠️ Container", value=f"`{vps['container_id'][:12]}…`" if vps["container_id"] else "—", inline=False)
+        embed.add_field(name="🛠️ Instance", value=f"`{vps['container_id'][:12]}…`" if vps["container_id"] else "—", inline=False)
         await interaction.edit_original_response(embed=embed, view=self._keep_view(view))
 
     async def render_logs(self, view, interaction: discord.Interaction, vps: dict) -> None:

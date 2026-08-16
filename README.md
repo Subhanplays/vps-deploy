@@ -1,7 +1,7 @@
 # VPS Bot v2
 
-A modern, white-label Discord VPS management bot. Users deploy real Docker
-containers with honest resource limits, manage them from interactive
+A modern, white-label Discord VPS management bot. Users deploy real LXD
+system containers with honest resource limits, manage them from interactive
 dashboards, and receive SSH access directly in their DMs.
 
 Everything users see — brand name, colors, status, embed copy, resource
@@ -34,7 +34,7 @@ without touching a single line of Python.
 
 ## Requirements
 
-- Python 3.10+ on a machine with the Docker CLI available
+- Python 3.10+ on a machine with the LXD CLI (`lxc`) available
 - A Discord bot token with the `applications.commands` scope
 
 ## Quick start
@@ -90,13 +90,19 @@ The single source of truth for defaults. Highlights:
     "basic": { "name": "Basic", "ram": "4GB",  "cpu": 2, "disk": "25GB",  "enabled": true },
     "pro":   { "name": "Pro",   "ram": "8GB",  "cpu": 4, "disk": "50GB",  "enabled": true }
   },
-  "docker": {
+  "images": {             // OS images from the LXD remotes
+    "ubuntu-22.04": { "name": "Ubuntu 22.04", "image": "ubuntu:22.04", "os": "ubuntu" },
+    "ubuntu-24.04": { "name": "Ubuntu 24.04", "image": "ubuntu:24.04", "os": "ubuntu" },
+    "debian-12":    { "name": "Debian 12",    "image": "images:debian/12", "os": "debian" }
+  },
+  "lxd": {
     "container_prefix": "vps",
-    "images": {
-      "ubuntu-22.04": { "name": "Ubuntu 22.04", "image": "ubuntu:22.04", "os": "ubuntu" },
-      "ubuntu-24.04": { "name": "Ubuntu 24.04", "image": "ubuntu:24.04", "os": "ubuntu" },
-      "debian-12":    { "name": "Debian 12",    "image": "debian:bookworm", "os": "debian" }
-    }
+    "storage_pool": "default",
+    "profiles": ["default"],
+    "autostart": true,
+    "storage_quota": true,
+    "security_privileged": false,
+    "ready_wait": 5
   },
   "name_generator": {
     "enabled": true, "prefixes": ["nova", "atlas", "orbit", "cloud", "zenith"],
@@ -118,27 +124,28 @@ LOG_FILE=logs/bot.log
 
 ### Runtime via `/settings`
 
-Every group in `config.json` (General, Appearance, VPS, Docker, Access,
+Every group in `config.json` (General, Appearance, VPS, LXD, Access,
 Security, Status Rotation, Plans) can be edited live with `/settings`
 (admin only). Changes are stored in the `settings` table and override the
 config file immediately.
 
 ## Resource honesty
 
-- RAM is enforced with Docker `--memory`
-- CPU is enforced with Docker `--cpus`
-- Disk is enforced with `--storage-opt size=` **when the host storage driver
-  supports quotas** (zfs/btrfs/devicemapper). Otherwise creation still works
+- RAM is enforced with LXD `limits.memory`
+- CPU is enforced with LXD `limits.cpu`
+- Disk is enforced with a root device `size=` quota **when the storage pool
+  driver supports quotas** (zfs/btrfs/lvm). Otherwise creation still works
   but a notice is shown that the quota is advisory — the bot never advertises
   a disk limit that isn't real.
-- Requested allocations are checked against actual host CPU/RAM/disk reported
-  by `docker info`, minus a configurable headroom, *before* anything is created.
+- Requested allocations are checked against actual host CPU/RAM/disk measured
+  on the physical host, minus a configurable headroom, *before* anything is
+  created.
 
 ## Security
 
 - Secrets (token) live only in `.env`
 - Input is sanitized (`^[a-z0-9][a-z0-9-]{0,62}$` for names/hostnames)
-- Docker runs as argument lists via `asyncio.create_subprocess_exec` — never
+- `lxc` runs as argument lists via `asyncio.create_subprocess_exec` — never
   `shell=True`, never user-built shell strings
 - All SQL is parameterized
 - Every VPS lookup is scoped to the calling user; container IDs are never
@@ -155,7 +162,7 @@ bot/
 ├── app.py               dependency container
 ├── config/              config.json + Settings (white-label + DB overrides)
 ├── database/            SQLite, migrations, models/repositories
-├── docker/              Docker CLI, container spec, stats/host resources
+├── lxd/                 lxc CLI, instance spec, stats/host resources
 ├── vps/                 business logic: create/manage/ss/status sync
 │   ├── manager.py       VPS lifecycle + name generator
 │   ├── resources.py     parsing + host/config validation + plans
@@ -168,13 +175,15 @@ bot/
 ## Deployment notes
 
 - Grant the bot `Send Messages`, `Embed Links`, `Use Slash Commands`.
-- The bot must be able to talk to Docker: run it on the Docker host, or mount
-  the Docker socket and install the CLI in the container.
-- tmate provisioning inside containers requires the container to reach the
-  internet (`apt-get update` / tmate servers). `--privileged` containers with
-  `--cap-add=ALL` are the default (configurable via `docker.privileged`).
-- Timescales: image pull + package install can take 1–3 minutes on first
-  create; tune `ssh.*` timeouts in config.
+- Install LXD on the host (`snap install lxd && lxd init`) and create a
+  storage pool with a quota-capable driver (`zfs` or `btrfs`) for enforced
+  disk limits. A plain `dir` pool still works — disk becomes advisory.
+- Run the bot on the LXD host (or as a user in the `lxd` group) so it can
+  drive the `lxc` CLI.
+- tmate provisioning inside instances requires the instance to reach the
+  internet (`apt-get update` / tmate servers).
+- Timescales: image download + package install can take 1–3 minutes on first
+  create; tune `ssh.*` timeouts and `lxd.ready_wait` in config.
 
 ## License
 

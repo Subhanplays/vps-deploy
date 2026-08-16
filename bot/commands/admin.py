@@ -121,14 +121,14 @@ class AdminCommands(commands.Cog):
             return
         embed = emb.warning(
             title="⛔ Stop all running VPS?",
-            description=f"This will stop **{len(running)}** running VPS instance(s).\nContainers stay intact and can be started again later.",
+            description=f"This will stop **{len(running)}** running VPS instance(s).\nInstances stay intact and can be started again later.",
         )
 
         async def on_confirm(inter: discord.Interaction):
             await inter.response.defer(ephemeral=True)
             stopped = 0
             for vps in running:
-                await self.app.docker.stop(vps["container_id"])
+                await self.app.lxd.stop(vps["container_id"])
                 dbm.update_vps_status(self.app.db, vps["id"], "stopped")
                 stopped += 1
             self.app.audit.log_admin(interaction.user.id, "kill_all", f"stopped={stopped}")
@@ -257,7 +257,7 @@ class AdminCommands(commands.Cog):
         embed.add_field(name="RAM", value=f"{vps['ram']:g} GB", inline=True)
         embed.add_field(name="CPU", value=f"{vps['cpu']:g}", inline=True)
         embed.add_field(name="Disk", value=f"{vps['disk']:g} GB", inline=True)
-        embed.add_field(name="Container", value=f"`{vps['container_id'] or '—'}`", inline=False)
+        embed.add_field(name="Instance", value=f"`{vps['container_id'] or '—'}`", inline=False)
         embed.add_field(name="Created", value=vps["created_at"], inline=True)
         embed.add_field(name="ID", value=f"`{vps['id']}`", inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)

@@ -11,7 +11,7 @@ import logging
 import random
 
 import database.models as dbm
-from docker.containers import ContainerSpec, create_container
+from lxd.instances import InstanceSpec, create_instance
 from config.settings import sanitize_name
 
 logger = logging.getLogger("vpsbot.vps")
@@ -26,7 +26,7 @@ class VPSManager:
         self.app = app
         self.db = app.db
         self.settings = app.settings
-        self.docker = app.docker
+        self.lxd = app.lxd
         self.stats = app.stats
         self.ssh = app.ssh
         self.resources = app.resources
@@ -45,7 +45,7 @@ class VPSManager:
         return f"{prefix}{sep}{number}"
 
     def container_name_for(self, name: str) -> str:
-        prefix = self.settings.get_str("docker.container_prefix", "vps")
+        prefix = self.settings.get_str("lxd.container_prefix", "vps")
         return sanitize_name(f"{prefix}-{name}")
 
     def hostname_for(self, name: str) -> str:
@@ -58,21 +58,21 @@ class VPSManager:
     def _image_map(self, os_key: str) -> dict | None:
         return self.settings.image_by_key(os_key)
 
-    def _spec(self, *, os_key: str, name: str, ram: float, cpu: float, disk: float) -> ContainerSpec:
+    def _spec(self, *, os_key: str, name: str, ram: float, cpu: float, disk: float) -> InstanceSpec:
         image = self._image_map(os_key)
-        cfg = self.settings.get("docker", {})
-        return ContainerSpec(
+        cfg = self.settings.get("lxd", {})
+        return InstanceSpec(
             image=image["image"],
             name=self.container_name_for(name),
             hostname=self.hostname_for(name),
             ram_gb=ram,
             cpu=cpu,
             disk_gb=disk,
-            restart_policy=cfg.get("restart_policy", "unless-stopped"),
-            privileged=cfg.get("privileged", True),
-            cap_add=cfg.get("cap_add", ["ALL"]),
-            storage_opt_enabled=cfg.get("storage_opt_size", True),
-            entrypoint=cfg.get("entrypoint", ["tail", "-f", "/dev/null"]),
+            autostart=cfg.get("autostart", True),
+            storage_quota_enabled=cfg.get("storage_quota", True),
+            storage_pool=cfg.get("storage_pool", "default"),
+            profiles=cfg.get("profiles", ["default"]),
+            security_privileged=cfg.get("security_privileged", False),
         )
 
     # ------------------------------------------------------------------
@@ -143,23 +143,26 @@ class VPSManager:
         container_id = None
 
         try:
-            await progress("Creating container…")
-            container_id, disk_enforced, error = await create_container(
-                self.docker, self._spec(os_key=os_key, name=final_name, ram=ram, cpu=cpu, disk=disk)
+            await progress("Creating instance…")
+            instance_name, disk_enforced, error = await create_instance(
+                self.lxd, self._spec(os_key=os_key, name=final_name, ram=ram, cpu=cpu, disk=disk)
             )
-            if not container_id:
-                raise VpsError(error or "Docker failed to create the container.")
+            if not instance_name:
+                raise VpsError(error or "LXD failed to create the instance.")
 
-            dbm.update_vps_container(self.db, vps_id, container_id, self.container_name_for(final_name))
+            dbm.update_vps_container(self.db, vps_id, instance_name, instance_name)
+
+            # Let cloud-init/DHCP finish before installing packages.
+            await asyncio.sleep(self.settings.get_int("lxd.ready_wait", 5))
 
             await progress("Installing packages…")
-            ok, err = await self.ssh.ensure_installed(container_id)
+            ok, err = await self.ssh.ensure_installed(instance_name)
             if not ok:
                 raise VpsError(err or "Failed to install packages.")
 
             await progress("Establishing SSH session…")
             await asyncio.sleep(self.settings.get_int("ssh.wait_after_install", 10))
-            ssh_line, err = await self.ssh.start_session(container_id)
+            ssh_line, err = await self.ssh.start_session(instance_name)
             if not ssh_line:
                 raise VpsError(err or "Failed to establish an SSH session.")
 
@@ -190,7 +193,7 @@ class VPSManager:
 
     async def _abort_creation(self, vps_id: str, container_id: str | None, error: str) -> None:
         if container_id:
-            await self.docker.remove(container_id)
+            await self.lxd.delete(container_id, force=True)
         dbm.update_vps_error(self.db, vps_id, error)
         dbm.update_vps_status(self.db, vps_id, "error")
         self.audit.log_vps_failed(vps_id, error)
@@ -218,7 +221,7 @@ class VPSManager:
 
         dbm.update_vps_status(self.db, vps_id, "starting")
         self.audit.log_action(vps_id, user_id, "vps_start")
-        result = await self.docker.start(vps["container_id"])
+        result = await self.lxd.start(vps["container_id"])
         dbm.update_vps_status(self.db, vps_id, "running" if result.ok else "error")
         if not result.ok:
             dbm.update_vps_error(self.db, vps_id, result.message)
@@ -231,7 +234,7 @@ class VPSManager:
             return False, "VPS not found."
         dbm.update_vps_status(self.db, vps_id, "stopping")
         self.audit.log_action(vps_id, user_id, "vps_stop")
-        result = await self.docker.stop(vps["container_id"])
+        result = await self.lxd.stop(vps["container_id"])
         dbm.update_vps_status(self.db, vps_id, "stopped" if result.ok else "error")
         if not result.ok:
             dbm.update_vps_error(self.db, vps_id, result.message)
@@ -248,7 +251,7 @@ class VPSManager:
             return False, "This VPS is still provisioning. Please wait."
         dbm.update_vps_status(self.db, vps_id, "starting")
         self.audit.log_action(vps_id, user_id, "vps_restart")
-        result = await self.docker.restart(vps["container_id"])
+        result = await self.lxd.restart(vps["container_id"])
         dbm.update_vps_status(self.db, vps_id, "running" if result.ok else "error")
         if not result.ok:
             dbm.update_vps_error(self.db, vps_id, result.message)
@@ -259,9 +262,9 @@ class VPSManager:
         vps = self.owned(vps_id, user_id)
         if not vps:
             return False, "VPS not found."
-        await self.docker.stop(vps["container_id"])
+        await self.lxd.stop(vps["container_id"])
         await asyncio.sleep(1)
-        await self.docker.remove(vps["container_id"])
+        await self.lxd.delete(vps["container_id"], force=True)
         dbm.delete_vps(self.db, vps_id)
         self.audit.log_vps_deleted(vps_id, user_id, vps["name"])
         return True, "VPS deleted."
@@ -279,13 +282,13 @@ class VPSManager:
         self.audit.log_action(vps_id, user_id, "vps_reinstall", f"-> {os_key}")
 
         if old_container:
-            await self.docker.stop(old_container)
+            await self.lxd.stop(old_container)
             await asyncio.sleep(1)
-            await self.docker.remove(old_container)
+            await self.lxd.delete(old_container, force=True)
             dbm.update_vps_container(self.db, vps_id, "", "")
 
-        container_id, disk_enforced, error = await create_container(
-            self.docker, self._spec(
+        instance_name, disk_enforced, error = await create_instance(
+            self.lxd, self._spec(
                 os_key=os_key,
                 name=vps["name"],
                 ram=vps["ram"],
@@ -293,26 +296,26 @@ class VPSManager:
                 disk=vps["disk"],
             )
         )
-        if not container_id:
+        if not instance_name:
             dbm.update_vps_status(self.db, vps_id, "error")
-            dbm.update_vps_error(self.db, vps_id, error or "Reinstall failed at container creation.")
-            return False, error or "Failed to recreate the container."
+            dbm.update_vps_error(self.db, vps_id, error or "Reinstall failed at instance creation.")
+            return False, error or "Failed to recreate the instance."
 
-        dbm.update_vps_container(self.db, vps_id, container_id, self.container_name_for(vps["name"]))
+        dbm.update_vps_container(self.db, vps_id, instance_name, instance_name)
         dbm.update_vps_ssh(self.db, vps_id, None)
         dbm.update_vps_status(self.db, vps_id, "reinstalling")
 
-        ok, err = await self.ssh.ensure_installed(container_id)
+        ok, err = await self.ssh.ensure_installed(instance_name)
         if not ok:
-            await self.docker.remove(container_id)
+            await self.lxd.delete(instance_name, force=True)
             dbm.update_vps_status(self.db, vps_id, "error")
             dbm.update_vps_error(self.db, vps_id, err or "Failed to install packages.")
             return False, err or "Failed to install packages."
 
         await asyncio.sleep(self.settings.get_int("ssh.wait_after_install", 10))
-        ssh_line, err = await self.ssh.start_session(container_id)
+        ssh_line, err = await self.ssh.start_session(instance_name)
         if not ssh_line:
-            await self.docker.remove(container_id)
+            await self.lxd.delete(instance_name, force=True)
             dbm.update_vps_status(self.db, vps_id, "error")
             dbm.update_vps_error(self.db, vps_id, err or "Failed to establish SSH.")
             return False, err or "Failed to establish an SSH session."
@@ -345,7 +348,7 @@ class VPSManager:
                 continue
             if not vps["container_id"]:
                 continue
-            state = await self.docker.state(vps["container_id"])
+            state = await self.lxd.state(vps["container_id"])
             if state is None:
                 state = "missing"
             mapped = "running" if state == "running" else "stopped"

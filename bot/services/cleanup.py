@@ -17,7 +17,7 @@ class CleanupService:
         self.db = app.db
         self.settings = app.settings
         self.vps = app.vps
-        self.docker = app.docker
+        self.lxd = app.lxd
         self._closed = False
 
     def attach(self, bot) -> None:
@@ -48,29 +48,25 @@ class CleanupService:
         except Exception:  # noqa: BLE001
             logger.exception("Audit log pruning failed")
 
-        # Remove containers that no longer have a database record (safety net).
+        # Remove instances that no longer have a database record (safety net).
         try:
             known = {
                 v["container_id"]
                 for v in dbm.get_all_vps(self.db)
                 if v.get("container_id")
             }
-            listed = await self._list_containers()
-            for container_id in listed:
-                if container_id not in known and container_id.startswith(self.settings.get_str("docker.container_prefix", "vps")):
+            listed = await self._list_instances()
+            for instance in listed:
+                if instance not in known and instance.startswith(self.settings.get_str("lxd.container_prefix", "vps")):
                     result["orphans_removed"] += 1
-                    await self.docker.remove(container_id)
+                    await self.lxd.delete(instance, force=True)
         except Exception:  # noqa: BLE001
-            logger.exception("Orphan container cleanup failed")
+            logger.exception("Orphan instance cleanup failed")
         return result
 
-    async def _list_containers(self) -> list[str]:
-        res = await self.docker._run(
-            ["ps", "-aq", "--filter", "label=managed-by=vpsbot"], timeout=30.0
-        )
-        if not res.ok:
-            return []
-        return [line for line in res.stdout.splitlines() if line]
+    async def _list_instances(self) -> list[str]:
+        data = await self.lxd.list_instances()
+        return [item.get("name", "") for item in data if item.get("name")]
 
     async def cleanup_ui(self, user_id: int) -> dict:
         """Admin-triggered cleanup (also removes dangling data rows)."""

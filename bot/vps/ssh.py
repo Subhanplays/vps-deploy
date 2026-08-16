@@ -22,7 +22,7 @@ class SSHError(Exception):
 class SSHManager:
     def __init__(self, app):
         self.app = app
-        self.docker = app.docker
+        self.lxd = app.lxd
         self.settings = app.settings
 
     def _install_command(self) -> str:
@@ -34,17 +34,24 @@ class SSHManager:
             f"{packages})"
         )
 
-    async def ensure_installed(self, container_id: str) -> tuple[bool, str]:
+    async def ensure_installed(self, instance: str) -> tuple[bool, str]:
         timeout = self.settings.get_int("ssh.install_timeout", 240)
+        attempts = max(1, self.settings.get_int("ssh.install_attempts", 2))
         cmd = ["bash", "-c", self._install_command()]
-        result = await self.docker.exec(container_id, cmd, timeout=timeout)
-        if not result.ok:
-            return False, result.message or "Failed to install tmate."
-        return True, ""
+        last = None
+        for attempt in range(attempts):
+            result = await self.lxd.exec(instance, cmd, timeout=timeout)
+            if result.ok:
+                return True, ""
+            last = result
+            if attempt < attempts - 1:
+                # DNS/DHCP is sometimes still settling right after launch.
+                await asyncio.sleep(5)
+        return False, last.message or "Failed to install tmate."
 
-    async def start_session(self, container_id: str) -> tuple[str | None, str]:
+    async def start_session(self, instance: str) -> tuple[str | None, str]:
         """Launch tmate and return ``(ssh_line, error_message)``."""
-        proc, err = await self.docker.exec_stream(container_id, ["tmate", "-F"])
+        proc, err = await self.lxd.exec_stream(instance, ["tmate", "-F"])
         if err is not None:
             return None, err.message or "Failed to launch tmate."
         if proc is None:

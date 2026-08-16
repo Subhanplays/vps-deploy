@@ -3,7 +3,7 @@
 Every VPS allocation is checked twice:
 
 1. against configured limits (``resources.max_*`` / plans) and
-2. against the *real* physical host capacity reported by Docker.
+2. against the *real* physical host capacity reported by LXD.
 
 Requests are rejected unless the host can genuinely provide them, so we never
 advertise resources that do not exist.

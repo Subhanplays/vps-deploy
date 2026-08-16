@@ -153,7 +153,7 @@ class UserCommands(commands.Cog):
         )
         embed.add_field(name="🖥️ Platform", value=f"**{name}**, version {self.app.version}", inline=True)
         embed.add_field(name="⚙️ Framework", value="discord.py", inline=True)
-        embed.add_field(name="🐳 Backend", value="Docker", inline=True)
+        embed.add_field(name="🖥️ Backend", value="LXD", inline=True)
         embed.add_field(name="💾 Database", value="SQLite", inline=True)
         embed.add_field(name="👨‍💻 Developer", value=settings.get_str("branding.developer_text", "Operated by YourBrand"), inline=False)
         links = []
