@@ -57,10 +57,10 @@ class SSHManager:
         """
         sock = "/tmp/tmate.sock"
 
-        # Kill any stale tmate so a brand-new relay session (and thus a new
-        # ssh string) is minted, then start a detached session.
+        # Kill any stale tmate (and its tmux server) so a brand-new relay session
+        # and a new ssh string are minted; the previous session is auto-deleted.
         bootstrap = (
-            "pkill -x tmate; sleep 1; rm -f {sock}; "
+            "pkill -x tmate; pkill -x tmux; sleep 1; rm -f {sock}; "
             "setsid tmate -S {sock} new-session -d -s main >/dev/null 2>&1 &"
         ).format(sock=sock)
         result = await self.lxd.exec(instance, ["bash", "-c", bootstrap], timeout=20.0)
